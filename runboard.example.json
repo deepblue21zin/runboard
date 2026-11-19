@@ -1,0 +1,9 @@
+{
+  "title": "Runboard",
+  "projects": [
+    {"key": "demo", "title": "데모", "logdir": "logs/demo"}
+  ],
+  "headline": [],
+  "stale_minutes": 10,
+  "plugins": ["files"]
+}

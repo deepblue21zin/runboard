@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "runboard"
+version = "0.1.0"
+description = "A small, dependency-free dashboard for training runs: curves, comparisons, notes, reports, project board."
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = []
+
+[project.scripts]
+runboard = "runboard.server:main"
+
+[tool.setuptools]
+packages = ["runboard"]
+
+[tool.setuptools.package-data]
+runboard = ["static/*", "static/plugins/*"]

@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Runboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600&family=Space+Grotesk:wght@500;600&display=swap">
+<link rel="stylesheet" href="static/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><h1 id="title">Runboard</h1><span class="logdir mono" id="logdir"></span></div>
+  <nav class="views" aria-label="화면">
+    <a href="#runs" data-view="runs">실행</a>
+    <a href="#reports" data-view="reports">리포트</a>
+    <a href="#board" data-view="board">프로젝트 관리</a>
+  </nav>
+  <nav class="seg" id="projects" aria-label="프로젝트"></nav>
+  <span class="spacer"></span>
+  <div class="gpus" id="gpus" aria-label="GPU"></div>
+  <label class="toggle"><input type="checkbox" id="auto-refresh" checked> 5초마다 새로고침</label>
+  <button class="btn" type="button" id="theme" title="화면 밝기">자동</button>
+</header>
+
+<div class="page" id="view-runs">
+  <div class="layout">
+    <aside class="panel roster" aria-label="실행 목록">
+      <div class="roster-head">
+        <div class="row"><span class="eyebrow">실행 목록</span><span class="eyebrow num" id="run-count"></span></div>
+        <input class="search" id="run-search" type="search" placeholder="이름 · 태그 · 목적 · 메모 검색">
+        <div class="chips" id="status-chips"></div>
+      </div>
+      <ul class="run-list" id="run-list"></ul>
+      <div class="roster-foot">
+        <span id="roster-hint">체크한 실행을 겹쳐서 비교 (최대 8개)</span>
+        <button class="linkish" id="toggle-archived" type="button">보관함 보기</button>
+      </div>
+    </aside>
+    <main>
+      <section class="panel focus" id="focus" aria-live="polite"></section>
+      <section class="panel">
+        <div class="tabs" role="tablist" id="tabs"></div>
+        <div class="analysis" id="tab-body"></div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<div class="page" id="view-reports" hidden></div>
+<div class="page" id="view-board" hidden></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<script src="static/app.js"></script>
+</body>
+</html>
