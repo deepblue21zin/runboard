@@ -265,7 +265,11 @@ td.diff { background: color-mix(in srgb, var(--s4) 12%, transparent); }
 .tr-canvas svg { display: block; }
 .tr-canvas text { font-family: var(--font-mono, monospace); font-size: 10.5px; fill: var(--fg-2); }
 .tr-canvas .tr-grp { font-family: inherit; font-size: 12px; font-weight: 600; }
-.tr-canvas .tr-res, .tr-canvas .tr-axis { fill: var(--muted); }
+.tr-canvas .tr-res, .tr-canvas .tr-axis { fill: var(--muted); font-family: inherit; }
+.tr-plots svg { display: block; width: 100%; height: auto; }
+.tr-share { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; background: var(--surface); }
+.tr-share summary { cursor: pointer; font-weight: 600; font-size: 13px; }
+.tr-share-body { display: flex; flex-direction: column; gap: 6px; padding: 6px 0 2px; }
 .tr-canvas .tr-grid { stroke: var(--line); stroke-dasharray: 2 4; }
 .tr-canvas .tr-sec { fill: none; stroke: var(--fg-2); stroke-opacity: .35; stroke-dasharray: 6 4; }
 .tr-canvas .tr-sec-t { font-family: inherit; font-size: 14px; font-weight: 700; fill: var(--fg); }

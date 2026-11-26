@@ -54,7 +54,8 @@ const state = {
   view: "runs", tab: store.get("tab", "curves"), xKey: store.get("xKey", "step"), smoothing: store.get("smoothing", 0.6),
   group: "all", metricQuery: "", compareMode: "last", diffOnly: true, cfgQuery: "",
   plugins: [], board: null, boardErr: null, boardSaving: false, reports: [], report: null, editing: null,
-  boardTab: store.get("board-tab", "overview"), tree: { sel: null, order: store.get("tree-order", "lineage"), archived: false, cfg: new Map(), files: new Map() },
+  boardTab: store.get("board-tab", "overview"), tree: { sel: null, order: store.get("tree-order", "lineage"), archived: false, cfg: new Map(), files: new Map(),
+    share: { key: true, fold: true, hideStopped: true, video: true, lang: "ko" } },
 };
 const withProject = (u) => u + (u.includes("?") ? "&" : "?") + "project=" + encodeURIComponent(state.project);
 const runPath = (name) => name.split("/").map(encodeURIComponent).join("/");
@@ -629,15 +630,30 @@ function roundForm(r) {
 // Every run is a point on a time axis (start -> last update), one row per run, rows grouped by top-level folder
 // (colour) and, optionally, by section (config "tree_sections": [{"title", "match": run-name regex}]).
 // notes.parent links a run to the run it came from; notes.change says what was changed, notes.verdict how it went.
+// The same builder draws the page and the shareable HTML file (Korean or English chrome).
 const TREE_PAL = ["#2563eb", "#ea580c", "#16a34a", "#ca8a04", "#db2777", "#0d9488", "#7c3aed", "#dc2626", "#0891b2", "#65a30d", "#9333ea", "#64748b"];
 const isSeedChange = (c) => /^(시드|seed|same|같은 설정)/i.test(c || "");
 const runStart = (r) => r.meta?.start_time || r.updated_time || 0;
-function treeLayout(runs) {
-  const T = state.tree, byName = new Map(runs.map((r) => [r.name, r])), shown = new Set(byName.keys());
-  const top = (r) => (r.notes?.folder || "").split("/")[0] || "폴더 없음";
+const treeTop = (r) => (r.notes?.folder || "").split("/")[0] || "";
+const TREE_T = {
+  ko: { noFolder: "폴더 없음", other: "기타", n: (k) => `${k}개`, seedMean: (k) => `(시드 ${k}개 평균)`, parent: "부모", next: "다음", root: "출발점 (부모 없음)", goal: "목적",
+    change: "바꾼 것", vsParent: "(부모 대비)", verdict: "결과 평가", results: "핵심 결과 (마지막 20행)", metric: "지표", thisRun: "이 실행", graph: "그래프", files: "파일 (영상·이미지)",
+    noFiles: "영상·이미지 파일이 없습니다", note: "메모", sameCfg: "설정은 부모와 같음 (시드·장치·이름 제외)", more: (k) => `외 ${k}개`, seeds: (k) => `같은 설정, 시드 ${k}개`, run: "실행",
+    meanSd: "평균 ± 표준편차", plusSeeds: (k) => `+ 시드 ${k}개`, noMetrics: "기록된 지표가 없습니다", locale: "ko-KR" },
+  en: { noFolder: "No folder", other: "Other", n: (k) => `${k} runs`, seedMean: (k) => `(mean of ${k} seeds)`, parent: "Parent", next: "Next", root: "Starting point (no parent)", goal: "Goal",
+    change: "What changed", vsParent: "(vs parent)", verdict: "Verdict", results: "Key results (last 20 rows)", metric: "Metric", thisRun: "This run", graph: "Chart", files: "Files (video, images)",
+    noFiles: "No video or image files", note: "Note", sameCfg: "Settings same as the parent (seed, device and name aside)", more: (k) => `${k} more`, seeds: (k) => `Same setting, ${k} seeds`, run: "Run",
+    meanSd: "Mean ± SD", plusSeeds: (k) => `+ ${k} seeds`, noMetrics: "No metrics logged", locale: "en-US" },
+};
+const treeLin = (runs) => Object.fromEntries(runs.map((r) => [r.name, { parent: r.notes?.parent || "", change: r.notes?.change || "", verdict: r.notes?.verdict || "" }]));
+const headKey = (r) => state.config?.headline?.[0] || Object.keys(r?.summary?.last || {}).find((k) => !META_KEYS.has(k));
+// o: {sel, order, availW, seeds: Map(head -> [runs]), hasVideo, lang, allGroups}
+function treeBuild(runs, lin, o = {}) {
+  const T = TREE_T[o.lang || "ko"], byName = new Map(runs.map((r) => [r.name, r])), shown = new Set(byName.keys());
+  const top = (r) => treeTop(r) || T.noFolder;
   const secDefs = (state.config?.tree_sections || []).map((s) => ({ title: s.title, re: (() => { try { return new RegExp(s.match); } catch { return null; } })() })).filter((s) => s.re);
-  const secOf = (r) => (secDefs.find((s) => s.re.test(r.name))?.title) || (secDefs.length ? "기타" : "");
-  const parentOf = (r) => { const p = r.notes?.parent; return p && shown.has(p) && secOf(byName.get(p)) === secOf(r) ? p : null; };
+  const secOf = (r) => (secDefs.find((s) => s.re.test(r.name))?.title) || (secDefs.length ? T.other : "");
+  const parentOf = (r) => { const p = lin[r.name]?.parent; return p && shown.has(p) && secOf(byName.get(p)) === secOf(r) ? p : null; };
   const kids = new Map();
   for (const r of runs) { const p = parentOf(r); if (p) { if (!kids.has(p)) kids.set(p, []); kids.get(p).push(r.name); } }
   // depth-first walk: seed repeats first, then follow-ups in the same folder, then the rest, oldest first
@@ -645,79 +661,94 @@ function treeLayout(runs) {
   const visit = (n) => {
     if (seen.has(n)) return; seen.add(n); walk.push(n);
     const me = byName.get(n);
-    (kids.get(n) || []).slice().sort((a, b) => (isSeedChange(byName.get(b).notes?.change) - isSeedChange(byName.get(a).notes?.change))
+    (kids.get(n) || []).slice().sort((a, b) => (isSeedChange(lin[b]?.change) - isSeedChange(lin[a]?.change))
       || ((top(byName.get(b)) === top(me)) - (top(byName.get(a)) === top(me))) || runStart(byName.get(a)) - runStart(byName.get(b))).forEach(visit);
   };
-  const secTitles = secDefs.length ? [...secDefs.map((s) => s.title), "기타"] : [""];
+  const secTitles = secDefs.length ? [...secDefs.map((s) => s.title), T.other] : [""];
   for (const st of secTitles) runs.filter((r) => secOf(r) === st && !parentOf(r)).sort((a, b) => runStart(a) - runStart(b)).forEach((r) => visit(r.name));
   const order = new Map(walk.map((n, i) => [n, i]));
   const num = (g) => { const m = /^(\d+)/.exec(g); return m ? +m[1] : 1e9; };
   const byNum = (a, b) => num(a) - num(b) || a.localeCompare(b);
-  const allGroups = [...new Set(runs.map(top))].sort(byNum);
-  const lineage = T.order !== "folder";
+  const allGroups = o.allGroups || [...new Set(runs.map(top))].sort(byNum);
+  const color = (g) => TREE_PAL[Math.max(0, allGroups.indexOf(g)) % TREE_PAL.length];
+  const lineage = o.order !== "folder";
   const sections = secTitles.map((st) => {
     const rs = runs.filter((r) => secOf(r) === st);
     const groups = lineage ? [...new Set(walk.filter((n) => secOf(byName.get(n)) === st).map((n) => top(byName.get(n))))] : [...new Set(rs.map(top))].sort(byNum);
     return { title: st, groups: groups.map((g) => ({ g, runs: rs.filter((r) => top(r) === g).sort((a, b) => lineage ? order.get(a.name) - order.get(b.name) : runStart(a) - runStart(b)) })) };
   }).filter((s) => s.groups.length);
-  return { sections, color: (g) => TREE_PAL[allGroups.indexOf(g) % TREE_PAL.length], top, parentOf, allGroups };
-}
-function renderTree() {
-  const root = $("#tree-root"); if (!root) return;
-  const T = state.tree;
-  const runs = state.runs.filter((r) => runStart(r) && (T.archived || !r.notes?.archived));
-  if (!runs.length) { root.innerHTML = '<div class="empty-state">실행이 없습니다</div>'; return; }
-  const { sections, color, top, parentOf, allGroups } = treeLayout(runs);
+  // the time axis starts right of the longest folder name, so vertical links never run through a name;
+  // each folder name has a line of its own above its runs
+  const meas = (() => { try { const cx = document.createElement("canvas").getContext("2d"); cx.font = "600 12px sans-serif"; return (t) => cx.measureText(t).width; } catch { return (t) => t.length * 9; } })();
+  const gNames = sections.flatMap((s) => s.groups.map((x) => x.g));
+  const L = Math.max(220, Math.ceil(Math.max(0, ...gNames.map(meas))) + 44), R = 320, rowH = 26, gGap = 12, gHead = 20, top0 = 36;
   const t0 = Math.min(...runs.map(runStart)), t1 = Math.max(...runs.map((r) => r.updated_time || runStart(r)), t0 + 60);
-  const L = 220, R = 300, rowH = 26, gGap = 14, top0 = 36, avail = Math.max(900, root.clientWidth - 34);
-  const span = t1 - t0, day = 86400, W = Math.max(avail, Math.min(6000, Math.round(span / day * 150)) + L + R);
+  const span = t1 - t0, day = 86400, W = Math.max(o.availW || 1200, Math.min(6000, Math.round(span / day * 150)) + L + R);
   const X = (t) => L + (t - t0) / span * (W - L - R);
   const rows = [], gInfo = [], sInfo = []; let y = top0;
   for (const s of sections) {
     const sy = y; if (s.title) y += 28;
-    for (const { g, runs: rs } of s.groups) { const y0 = y; rs.forEach((r) => { rows.push({ r, g, y: y + rowH / 2 }); y += rowH; }); gInfo.push({ g, y0, y1: y }); y += gGap; }
+    for (const { g, runs: rs } of s.groups) { const y0 = y; y += gHead; rs.forEach((r) => { rows.push({ r, g, y: y + rowH / 2 }); y += rowH; }); gInfo.push({ g, y0, y1: y }); y += gGap; }
     if (s.title) { sInfo.push({ title: s.title, y0: sy, y1: y, n: s.groups.reduce((a, x) => a + x.runs.length, 0) }); y += 18; }
   }
   const H = y + 8, pos = new Map(rows.map((x) => [x.r.name, x]));
-  // time grid: days, or hours for short projects
   const stepT = span > 2 * day ? day : span > 6 * 3600 ? 3 * 3600 : 3600;
   const g0 = new Date(t0 * 1000); g0.setMinutes(0, 0, 0); if (stepT === day) g0.setHours(0);
   let grid = "";
   for (let t = g0.getTime() / 1000; t <= t1; t += stepT) { const x = X(t); if (x < L - 1) continue;
-    grid += `<line x1="${x}" x2="${x}" y1="${top0 - 8}" y2="${H}" class="tr-grid"/><text x="${x + 3}" y="${top0 - 14}" class="tr-axis">${new Date(t * 1000).toLocaleString("ko-KR", stepT === day ? { month: "numeric", day: "numeric", weekday: "short" } : { month: "numeric", day: "numeric", hour: "2-digit" })}</text>`; }
-  const sel = T.sel && pos.has(T.sel) ? T.sel : null;
-  const kin = new Set(); if (sel) { kin.add(sel); const p = state.byName.get(sel)?.notes?.parent; if (p) kin.add(p); rows.forEach(({ r }) => { if (r.notes?.parent === sel) kin.add(r.name); }); }
-  let bands = "", edges = "", pts = "";
-  for (const s of sInfo) bands += `<rect x="1" y="${s.y0}" width="${W - 2}" height="${s.y1 - s.y0}" rx="10" class="tr-sec"/><text x="14" y="${s.y0 + 19}" class="tr-sec-t">${esc(s.title)} · ${s.n}개</text>`;
+    grid += `<line x1="${x}" x2="${x}" y1="${top0 - 8}" y2="${H}" class="tr-grid"/><text x="${x + 3}" y="${top0 - 14}" class="tr-axis">${new Date(t * 1000).toLocaleString(T.locale, stepT === day ? { month: "numeric", day: "numeric", weekday: "short" } : { month: "numeric", day: "numeric", hour: "2-digit" })}</text>`; }
+  const sel = o.sel && pos.has(o.sel) ? o.sel : null;
+  const kin = new Set(); if (sel) { kin.add(sel); const p = lin[sel]?.parent; if (p) kin.add(p); rows.forEach(({ r }) => { if (lin[r.name]?.parent === sel) kin.add(r.name); }); }
+  let bands = "", edges = "", pts = "", labels = "";
+  for (const s of sInfo) bands += `<rect x="1" y="${s.y0}" width="${W - 2}" height="${s.y1 - s.y0}" rx="10" class="tr-sec"/><text x="14" y="${s.y0 + 19}" class="tr-sec-t">${esc(s.title)} · ${T.n(s.n)}</text>`;
   for (const gi of gInfo) { const c = color(gi.g);
-    bands += `<rect x="4" y="${gi.y0 - 4}" width="${W - 8}" height="${gi.y1 - gi.y0 + 8}" rx="8" fill="${c}" fill-opacity=".06"/><rect x="4" y="${gi.y0 - 4}" width="4" height="${gi.y1 - gi.y0 + 8}" rx="2" fill="${c}"/><text x="16" y="${gi.y0 + 14}" class="tr-grp" fill="${c}">${esc(gi.g.length > 28 ? gi.g.slice(0, 27) + "…" : gi.g)}</text>`; }
-  // links: down (or up) from the parent's point, then right to the child (cross-section links included)
+    bands += `<rect x="4" y="${gi.y0 - 4}" width="${W - 8}" height="${gi.y1 - gi.y0 + 8}" rx="8" fill="${c}" fill-opacity=".06"/><rect x="4" y="${gi.y0 - 4}" width="4" height="${gi.y1 - gi.y0 + 8}" rx="2" fill="${c}"/>`;
+    labels += `<text x="16" y="${gi.y0 + 13}" class="tr-grp" fill="${c}">${esc(gi.g)}</text>`; }
   for (const { r, y, g } of rows) {
-    const p = r.notes?.parent, pp = p && pos.get(p); if (!pp) continue;
-    const seed = isSeedChange(r.notes?.change), xa = X(runStart(pp.r)), xb = X(runStart(r)), ya = pp.y, on = sel && kin.has(r.name) && kin.has(p);
+    const p = lin[r.name]?.parent, pp = p && pos.get(p); if (!pp) continue;
+    const seed = isSeedChange(lin[r.name]?.change), xa = X(runStart(pp.r)), xb = X(runStart(r)), ya = pp.y, on = sel && kin.has(r.name) && kin.has(p);
     const rr = Math.min(6, Math.abs(y - ya) / 2, Math.max(0, xb - xa) / 2), dy = y > ya ? 1 : -1;
     const d = Math.abs(y - ya) < 1 ? `M${xa},${ya} H${xb}` : xb - xa < 1 ? `M${xa},${ya} V${y}` : `M${xa},${ya} V${y - dy * rr} Q${xa},${y} ${xa + rr},${y} H${xb}`;
-    edges += `<path d="${d}" fill="none" stroke="${color(g)}" stroke-width="${on ? 3 : seed ? 1.2 : 2}" stroke-opacity="${sel && !on ? 0.15 : seed ? 0.5 : 0.8}" ${seed ? 'stroke-dasharray="3 3"' : ""}/>`;
+    edges += `<path class="tr-edge" data-a="${esc(p)}" data-b="${esc(r.name)}" d="${d}" fill="none" stroke="${color(g)}" stroke-width="${on ? 3 : seed ? 1.2 : 2}" stroke-opacity="${sel && !on ? 0.15 : seed ? 0.5 : 0.8}" ${seed ? 'stroke-dasharray="3 3"' : ""}/>`;
   }
-  const hk = state.config?.headline?.[0];
   for (const { r, y, g } of rows) {
     const c = color(g), x = X(runStart(r)), xe = X(r.updated_time || runStart(r)), bad = ["failed", "stopped"].includes(r.status), dim = sel && !kin.has(r.name);
-    const v = hk ? r.summary?.last?.[hk] : null, res = typeof v === "number" ? `${hk} ${fmtNum(v)}` : "";
+    const heads = [r, ...((o.seeds && o.seeds.get(r.name)) || []).map((n) => state.byName.get(n)).filter(Boolean)], hk = headKey(r);
+    const vs = heads.map((h) => h.summary?.last?.[hk]).filter((v) => typeof v === "number");
+    const res = vs.length ? `${hk} ${fmtNum(vs.reduce((a, b) => a + b, 0) / vs.length)}${vs.length > 1 ? " " + T.seedMean(vs.length) : ""}` : "";
+    const nm = r.name + (heads.length > 1 ? ` ×${heads.length}` : "");
     pts += `<g class="tr-run ${sel === r.name ? "sel" : ""}" data-tree-run="${esc(r.name)}" tabindex="0" role="button" opacity="${dim ? 0.35 : 1}">`
       + `<line x1="${x}" x2="${Math.max(xe, x + 2)}" y1="${y}" y2="${y}" stroke="${c}" stroke-width="5" stroke-opacity=".35" stroke-linecap="round"/>`
       + `<circle class="pt" cx="${x}" cy="${y}" r="6" fill="${bad ? "var(--surface)" : c}" stroke="${c}" stroke-width="2"/>`
-      + `<text class="tr-lbl" x="${Math.max(xe, x) + 10}" y="${y + 4}">${esc(r.name)}${r.status === "running" ? " ⏳" : ""}</text>`
-      + (res ? `<text class="tr-res" x="${Math.max(xe, x) + 10 + r.name.length * 6.4 + 18}" y="${y + 4}">${esc(res)}</text>` : "")
-      + `<title>${esc(r.name)}${r.notes?.change ? "\n바꾼 것: " + esc(r.notes.change) : ""}${r.notes?.verdict ? "\n결과: " + esc(r.notes.verdict) : ""}</title></g>`;
+      + `<text class="tr-lbl" x="${Math.max(xe, x) + 10}" y="${y + 4}">${esc(nm)}${r.status === "running" ? " ⏳" : ""}${o.hasVideo && o.hasVideo(r.name) ? " ▶" : ""}${res ? `<tspan class="tr-res" dx="14">${esc(res)}</tspan>` : ""}</text>`
+      + `<title>${esc(r.name)}${lin[r.name]?.change ? "\n" + esc(lin[r.name].change) : ""}${lin[r.name]?.verdict ? "\n" + esc(lin[r.name].verdict) : ""}</title></g>`;
   }
-  root.innerHTML = `<header><h3>학습 트리 <span class="hint">실행 ${rows.length}개</span></h3>
+  return { svg: `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="training tree">${bands}${grid}${edges}${pts}${labels}</svg>`,
+    groups: allGroups, color, n: rows.length, order: rows.map((x) => x.r.name), top };
+}
+function renderTree() {
+  const root = $("#tree-root"); if (!root) return;
+  const T = state.tree, sh = T.share;
+  const runs = state.runs.filter((r) => runStart(r) && (T.archived || !r.notes?.archived));
+  if (!runs.length) { root.innerHTML = '<div class="empty-state">실행이 없습니다</div>'; return; }
+  const B = treeBuild(runs, treeLin(runs), { sel: T.sel, order: T.order, availW: Math.max(900, root.clientWidth - 34) });
+  const sel = T.sel && B.order.includes(T.sel) ? T.sel : null;
+  root.innerHTML = `<header><h3>학습 트리 <span class="hint">실행 ${B.n}개</span></h3>
       <p>가로 = 시간 (점은 학습 시작, 막대는 학습 기간), 줄 하나 = 실행 하나, 색 = 폴더. 연결선은 부모 실행에서 무엇을 바꿔 이 실행을 했는지 (실선 = 설정 변경, 점선 = 시드만 변경), 속 빈 점 = 중단·실패. 점을 누르면 목적·바꾼 설정·결과·그래프·파일이 열리고, 거기서 부모·바꾼 것·결과 평가를 적을 수 있습니다.</p></header>
-    <div class="tr-legend">${allGroups.map((g) => `<span><i style="background:${color(g)}"></i>${esc(g)}</span>`).join("")}
+    <div class="tr-legend">${B.groups.map((g) => `<span><i style="background:${B.color(g)}"></i>${esc(g)}</span>`).join("")}
       <span class="tr-ctl"><button class="chip" type="button" data-tree-order="lineage" aria-pressed="${T.order !== "folder"}">계보 순</button><button class="chip" type="button" data-tree-order="folder" aria-pressed="${T.order === "folder"}">폴더 번호 순</button>
       <label class="toggle"><input type="checkbox" id="tree-archived" ${T.archived ? "checked" : ""}> 보관함 실행도</label></span></div>
-    <div class="tr-canvas"><svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="학습 트리">${bands}${grid}${edges}${pts}</svg></div>
+    <details class="tr-share"><summary>공유용 HTML 받기</summary><div class="tr-share-body">
+      <p class="hint">파일 하나로 받아 그대로 보내면 됩니다. 받은 사람은 브라우저로 열어 점을 눌러 설명을 봅니다 (대시보드 접속 필요 없음).</p>
+      <label class="toggle"><input type="checkbox" data-share="key" ${sh.key ? "checked" : ""}> 핵심 경로만 <span class="hint">즐겨찾기(★) 실행까지 이어진 줄기 + 거기서 갈라진 한 단계</span></label>
+      <label class="toggle"><input type="checkbox" data-share="fold" ${sh.fold ? "checked" : ""}> 시드 반복 접기 <span class="hint">"시드…"로 적은 실행을 부모 한 줄로, 숫자는 평균</span></label>
+      <label class="toggle"><input type="checkbox" data-share="hideStopped" ${sh.hideStopped ? "checked" : ""}> 중단된 실행 숨기기 <span class="hint">기록이 없거나 다시 시작한 실행</span></label>
+      <label class="toggle"><input type="checkbox" data-share="video" ${sh.video ? "checked" : ""}> 영상 넣기 <span class="hint">설명 패널과 "영상 비교"에 들어감 (파일이 커짐). 이름에 cmp가 들어간 영상을 먼저 씀</span></label>
+      <span class="chips" role="group" aria-label="언어">언어 <button class="chip" type="button" data-share-lang="ko" aria-pressed="${sh.lang !== "en"}">한국어</button><button class="chip" type="button" data-share-lang="en" aria-pressed="${sh.lang === "en"}">English</button></span>
+      <div><button class="btn primary" type="button" data-tree-export>HTML 받기</button> <span class="hint" id="tree-export-state"></span></div></div></details>
+    <div class="tr-canvas">${B.svg}</div>
     <aside class="tr-side" id="tree-side" ${sel ? "" : "hidden"} aria-label="실행 설명"></aside>`;
-  if (sel) renderTreeSide(state.byName.get(sel), color(top(state.byName.get(sel))));
+  if (sel) renderTreeSide(state.byName.get(sel), B.color(B.top(state.byName.get(sel))));
 }
 function miniChart(series) {
   const all = series.flatMap((s) => s.points); if (!all.length) return "";
@@ -729,50 +760,148 @@ function miniChart(series) {
     ${series.map((s) => `<polyline fill="none" stroke="${s.color}" stroke-width="2" ${s.dash ? 'stroke-dasharray="4 3"' : ""} points="${downsample(s.points, 300).map((p) => `${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join(" ")}"/>`).join("")}</svg>
     <div class="hint">${series.map((s) => `<span style="color:${s.color}">${s.dash ? "┄" : "━"}</span> ${esc(s.name)}`).join(" &nbsp; ")}</div>`;
 }
+async function treeFiles(n) { const T = state.tree; if (!T.files.has(n)) { try { T.files.set(n, (await api.files(n)).files || []); } catch { T.files.set(n, []); } } return T.files.get(n); }
+const treeVideos = (fs) => fs.filter((f) => /\.(mp4|webm)$/i.test(f.path)).sort((a, b) => (/cmp/i.test(b.path) - /cmp/i.test(a.path)) || (b.mtime || 0) - (a.mtime || 0));
+// drawer body as an HTML string; ctx: {lin, shown, seeds, lang, embedVideo(run, file) -> src | null}
+async function treeSideHTML(r, c, ctx) {
+  const T = TREE_T[ctx.lang || "ko"], lin = ctx.lin, me = lin[r.name] || {}, n = r.notes || {};
+  const par = me.parent && state.byName.get(me.parent) ? me.parent : "";
+  const kids = Object.entries(lin).filter(([, v]) => v.parent === r.name).map(([k]) => k).filter((k) => !ctx.shown || ctx.shown.has(k));
+  const seeds = (ctx.seeds && ctx.seeds.get(r.name)) || [];
+  const keys = (state.config?.headline || []).length ? state.config.headline : Object.keys(r.summary?.last || {}).filter((k) => !META_KEYS.has(k)).slice(0, 6);
+  const L1 = r.summary?.last || {}, L0 = par ? state.byName.get(par).summary?.last || {} : null;
+  let res = keys.length ? `<table class="tr-tbl"><thead><tr><th>${T.metric}</th>${L0 ? `<th>${T.parent}</th>` : ""}<th>${T.thisRun}</th></tr></thead><tbody>${keys.map((k) => `<tr><td class="mono">${esc(k)}</td>${L0 ? `<td>${fmtNum(L0[k])}</td>` : ""}<td><b>${fmtNum(L1[k])}</b></td></tr>`).join("")}</tbody></table>` : `<span class="hint">${T.noMetrics}</span>`;
+  if (seeds.length && keys.length) {
+    const all = [r, ...seeds.map((x) => state.byName.get(x)).filter(Boolean)];
+    const ms = (k) => { const v = all.map((x) => x.summary?.last?.[k]).filter((x) => typeof x === "number"); if (!v.length) return "–"; const m = v.reduce((a, b) => a + b, 0) / v.length; const sd = v.length > 1 ? Math.sqrt(v.reduce((a, b) => a + (b - m) ** 2, 0) / (v.length - 1)) : 0; return `${fmtNum(m)} ± ${fmtNum(sd)}`; };
+    res += `<h5>${T.seeds(all.length)}</h5><table class="tr-tbl"><thead><tr><th>${T.run}</th>${keys.slice(0, 3).map((k) => `<th class="mono">${esc(k)}</th>`).join("")}</tr></thead><tbody>${all.map((x) => `<tr><td class="mono">${esc(x.name)}</td>${keys.slice(0, 3).map((k) => `<td>${fmtNum(x.summary?.last?.[k])}</td>`).join("")}</tr>`).join("")}<tr><td><b>${T.meanSd}</b></td>${keys.slice(0, 3).map((k) => `<td><b>${ms(k)}</b></td>`).join("")}</tr></tbody></table>`;
+  }
+  await Promise.all([loadMetrics(r.name), par ? loadMetrics(par) : null]);
+  const pk = keys[0], s1 = pk ? series(r.name, pk) : [], s0 = pk && par ? series(par, pk) : [];
+  const plot = s1.length ? `<div class="hint mono">${esc(pk)}</div>` + miniChart([...(s0.length ? [{ name: T.parent + " " + par, color: "#94a3b8", dash: true, points: s0 }] : []), { name: T.thisRun, color: c, points: s1 }]) : `<span class="hint">${T.noMetrics}</span>`;
+  let diff = "";
+  if (par) {
+    const cfgOf = async (x) => { const TT = state.tree; if (!TT.cfg.has(x)) { try { TT.cfg.set(x, (await api.runConfig(x)).flat || {}); } catch { TT.cfg.set(x, {}); } } return TT.cfg.get(x); };
+    const [c1, c0] = await Promise.all([cfgOf(r.name), cfgOf(par)]);
+    const show = (v) => (v === undefined ? "—" : typeof v === "string" ? v : JSON.stringify(v));
+    const ks = Object.keys({ ...c0, ...c1 }).filter((k) => show(c0[k]) !== show(c1[k]) && !/(^|\.)(seed|device|run_name|name)$/.test(k));
+    diff = ks.length ? `<table class="tr-tbl"><tbody>${ks.slice(0, 30).map((k) => `<tr><td class="mono">${esc(k)}</td><td>${esc(show(c0[k]))} → <span class="tr-chg">${esc(show(c1[k]))}</span></td></tr>`).join("")}</tbody></table>${ks.length > 30 ? `<span class="hint">${T.more(ks.length - 30)}</span>` : ""}` : `<span class="hint">${T.sameCfg}</span>`;
+  }
+  const fs = await treeFiles(r.name), vids = treeVideos(fs), imgs = fs.filter((f) => /\.(png|jpe?g|gif|svg|webp)$/i.test(f.path));
+  const vsrc = await Promise.all(vids.slice(0, ctx.videoLimit || 3).map((f) => (ctx.embedVideo ? ctx.embedVideo(r.name, f) : api.fileUrl(r.name, f.path))));
+  const files = vids.slice(0, ctx.videoLimit || 3).map((f, i) => (vsrc[i] ? `<video src="${vsrc[i]}" controls preload="metadata" playsinline></video><span class="hint mono">${esc(f.path)}</span>` : "")).join("")
+    + (imgs.length && !ctx.noImages ? `<div class="tr-imgs">${imgs.slice(-4).map((f) => `<img src="${api.fileUrl(r.name, f.path)}" alt="${esc(f.path)}" loading="lazy">`).join("")}</div>` : "");
+  return `<div class="tr-folder" style="color:${c}">${esc(n.folder || T.noFolder)}</div><h4 class="mono">${esc(r.name)}${seeds.length ? ` <span class="hint">${T.plusSeeds(seeds.length)}</span>` : ""}</h4>
+    <div class="tr-nav">${par ? `<span class="hint">${T.parent}</span><button type="button" data-tree-run="${esc(par)}">↑ ${esc(par)}</button>` : `<span class="hint">${T.root}</span>`}${kids.length ? `<span class="hint">${T.next}</span>${kids.map((k) => `<button type="button" data-tree-run="${esc(k)}">↓ ${esc(k)}</button>`).join("")}` : ""}</div>
+    ${n.goal ? `<h5>${T.goal}</h5><div class="tr-goal">${esc(n.goal)}</div>` : ""}
+    <h5>${T.change} ${par ? `<span class="hint">${T.vsParent}</span>` : ""}</h5><div>${esc(me.change || "–")}</div>${diff}
+    <h5>${T.verdict}</h5><div class="tr-verdict">${esc(me.verdict || "–")}</div>
+    <h5>${T.results}</h5>${res}
+    <h5>${T.graph}</h5><div class="tr-plots">${plot}</div>
+    <h5>${T.files}</h5>${files || `<span class="hint">${T.noFiles}</span>`}
+    ${n.note ? `<h5>${T.note}</h5><div>${esc(n.note)}</div>` : ""}`;
+}
 async function renderTreeSide(r, c) {
   const side = $("#tree-side"); if (!side || !r) return;
-  const T = state.tree, n = r.notes || {}, par = n.parent && state.byName.get(n.parent) ? n.parent : "";
-  const kids = state.runs.filter((x) => x.notes?.parent === r.name).map((x) => x.name);
+  const n = r.notes || {};
   side.hidden = false; side.style.setProperty("--trc", c);
-  side.innerHTML = `<button class="btn tr-close" type="button" data-tree-close>닫기 ✕</button>
-    <div class="tr-folder" style="color:${c}">${esc(n.folder || "폴더 없음")}</div><h4 class="mono">${esc(r.name)}</h4>
-    <div class="tr-nav">${par ? `<span class="hint">부모</span><button type="button" data-tree-run="${esc(par)}">↑ ${esc(par)}</button>` : '<span class="hint">출발점 (부모 없음)</span>'}${kids.length ? `<span class="hint">다음</span>${kids.map((k) => `<button type="button" data-tree-run="${esc(k)}">↓ ${esc(k)}</button>`).join("")}` : ""}</div>
-    ${n.goal ? `<h5>목적</h5><div class="tr-goal">${esc(n.goal)}</div>` : ""}
-    <h5>바꾼 것</h5><div>${esc(n.change || "–")}</div><div id="tree-diff" class="hint">${par ? "부모와 설정 비교 중…" : ""}</div>
-    <h5>결과 평가</h5><div class="tr-verdict">${esc(n.verdict || "–")}</div>
-    <h5>핵심 결과 <span class="hint">(마지막 20행 기준)</span></h5><div id="tree-res"></div>
-    <h5>그래프</h5><div id="tree-plot" class="hint">불러오는 중…</div>
-    <h5>파일 (영상·이미지)</h5><div id="tree-files" class="hint">불러오는 중…</div>
-    ${n.note ? `<h5>메모</h5><div>${esc(n.note)}</div>` : ""}
+  side.innerHTML = `<button class="btn tr-close" type="button" data-tree-close>닫기 ✕</button><span class="hint">불러오는 중…</span>`;
+  const body = await treeSideHTML(r, c, { lin: treeLin(state.runs) });
+  if (state.tree.sel !== r.name || !$("#tree-side")) return;
+  side.innerHTML = `<button class="btn tr-close" type="button" data-tree-close>닫기 ✕</button>${body}
     <details class="tr-edit"><summary>계보·평가 고치기</summary>
       <label>부모 실행<select class="field" id="tree-e-parent"><option value="">(없음: 출발점)</option>${state.runs.filter((x) => x.name !== r.name).map((x) => `<option ${x.name === n.parent ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></label>
       <label>바꾼 것 <span class="hint">"시드만 다름"으로 쓰면 점선</span><input class="field" id="tree-e-change" value="${esc(n.change || "")}" placeholder="예: 학습률 1e-3 → 3e-4"></label>
       <label>결과 평가<textarea class="field" id="tree-e-verdict" placeholder="예: 채택. 검증 정확도 +2%p">${esc(n.verdict || "")}</textarea></label>
       <button class="btn primary" type="button" data-tree-save>저장</button></details>
     <a class="btn" href="?project=${encodeURIComponent(state.project)}&run=${encodeURIComponent(r.name)}#runs">실행 화면에서 보기</a>`;
-  // key results: headline metrics, this run vs parent
-  const keys = (state.config?.headline || []).length ? state.config.headline : Object.keys(r.summary?.last || {}).filter((k) => !META_KEYS.has(k)).slice(0, 6);
-  const L1 = r.summary?.last || {}, L0 = par ? state.byName.get(par).summary?.last || {} : null;
-  $("#tree-res").innerHTML = keys.length ? `<table class="tr-tbl"><thead><tr><th>지표</th>${L0 ? "<th>부모</th>" : ""}<th>이 실행</th></tr></thead><tbody>${keys.map((k) => `<tr><td class="mono">${esc(k)}</td>${L0 ? `<td>${fmtNum(L0[k])}</td>` : ""}<td><b>${fmtNum(L1[k])}</b></td></tr>`).join("")}</tbody></table>` : '<span class="hint">기록된 지표가 없습니다</span>';
-  // plot: first headline metric over steps, this run vs parent
-  await Promise.all([loadMetrics(r.name), par ? loadMetrics(par) : null]);
-  const pk = keys[0], plot = $("#tree-plot");
-  if (plot) { const s1 = pk ? series(r.name, pk) : [], s0 = pk && par ? series(par, pk) : [];
-    plot.className = ""; plot.innerHTML = s1.length ? `<div class="hint mono">${esc(pk)}</div>` + miniChart([...(s0.length ? [{ name: "부모 " + par, color: "var(--muted)", dash: true, points: s0 }] : []), { name: "이 실행", color: c, points: s1 }]) : '<span class="hint">그릴 지표가 없습니다</span>'; }
-  // settings that differ from the parent
-  if (par) {
-    const cfgOf = async (x) => { if (!T.cfg.has(x)) { try { T.cfg.set(x, (await api.runConfig(x)).flat || {}); } catch { T.cfg.set(x, {}); } } return T.cfg.get(x); };
-    const [c1, c0] = await Promise.all([cfgOf(r.name), cfgOf(par)]);
-    const show = (v) => (v === undefined ? "—" : typeof v === "string" ? v : JSON.stringify(v));
-    const diff = Object.keys({ ...c0, ...c1 }).filter((k) => show(c0[k]) !== show(c1[k]) && !/(^|\.)(seed|device|run_name|name)$/.test(k));
-    const box = $("#tree-diff"); if (box) { box.className = ""; box.innerHTML = diff.length ? `<table class="tr-tbl"><tbody>${diff.slice(0, 30).map((k) => `<tr><td class="mono">${esc(k)}</td><td>${esc(show(c0[k]))} → <span class="tr-chg">${esc(show(c1[k]))}</span></td></tr>`).join("")}</tbody></table>${diff.length > 30 ? `<span class="hint">외 ${diff.length - 30}개</span>` : ""}` : '<span class="hint">설정은 부모와 같음 (시드·장치·이름 제외)</span>'; }
+}
+// ---- shareable HTML: one self-contained file (tree + every drawer + optional videos)
+async function exportTree(opt) {
+  const st = (t) => { const el = $("#tree-export-state"); if (el) el.textContent = t; };
+  const lang = opt.lang === "en" ? "en" : "ko", T = TREE_T[lang];
+  const all = state.runs.filter((r) => runStart(r) && !r.notes?.archived), byName = new Map(all.map((r) => [r.name, r])), lin0 = treeLin(all);
+  let keep = new Set(all.map((r) => r.name));
+  if (opt.key) {   // starred runs and their ancestors, + one step of branches off that path, + their seed repeats
+    const K = all.filter((r) => r.notes?.star).map((r) => r.name);
+    if (K.length) {
+      const path = new Set(); for (const k of K) { let n = k; while (n && byName.has(n) && !path.has(n)) { path.add(n); n = lin0[n]?.parent; } }
+      keep = new Set(path);
+      for (const r of all) { const p = lin0[r.name]?.parent; if (p && path.has(p)) keep.add(r.name); }
+      for (let i = 0; i < 3; i++) for (const r of all) { const p = lin0[r.name]?.parent; if (p && keep.has(p) && isSeedChange(lin0[r.name]?.change)) keep.add(r.name); }
+    }
   }
-  // media files
-  if (!T.files.has(r.name)) { try { T.files.set(r.name, (await api.files(r.name)).files || []); } catch { T.files.set(r.name, []); } }
-  const fs = T.files.get(r.name), vids = fs.filter((f) => /\.(mp4|webm)$/i.test(f.path)), imgs = fs.filter((f) => /\.(png|jpe?g|gif|svg|webp)$/i.test(f.path));
-  const fb = $("#tree-files");
-  if (fb) { fb.className = ""; fb.innerHTML = (vids.slice(-3).map((f) => `<video src="${api.fileUrl(r.name, f.path)}" controls preload="metadata" playsinline></video><span class="hint mono">${esc(f.path)}</span>`).join("")
-    + (imgs.length ? `<div class="tr-imgs">${imgs.slice(-4).map((f) => `<a href="${api.fileUrl(r.name, f.path)}" target="_blank" rel="noopener"><img src="${api.fileUrl(r.name, f.path)}" alt="${esc(f.path)}" loading="lazy"></a>`).join("")}</div>` : "")) || '<span class="hint">영상·이미지 파일이 없습니다</span>'; }
+  const dead = (r) => ["stopped", "failed"].includes(r.status) && (!r.summary?.rows || all.some((x) => lin0[x.name]?.parent === r.name && /^(같은 설정|same|restart)/i.test(lin0[x.name]?.change || "")));
+  if (opt.hideStopped) for (const r of all) if (dead(r)) keep.delete(r.name);
+  const seeds = new Map(), folded = new Set();
+  if (opt.fold) for (const r of all) {
+    if (!keep.has(r.name) || !isSeedChange(lin0[r.name]?.change)) continue;
+    let head = lin0[r.name]?.parent; while (head && isSeedChange(lin0[head]?.change) && lin0[head]?.parent) head = lin0[head].parent;
+    if (!head || !keep.has(head) || head === r.name) continue;
+    folded.add(r.name); if (!seeds.has(head)) seeds.set(head, []); seeds.get(head).push(r.name);
+  }
+  const shownRuns = all.filter((r) => keep.has(r.name) && !folded.has(r.name)), shown = new Set(shownRuns.map((r) => r.name));
+  const lin = {};
+  for (const r of shownRuns) { let p = lin0[r.name]?.parent; while (p && !shown.has(p)) p = lin0[p]?.parent; lin[r.name] = { ...lin0[r.name], parent: p || "" }; }
+  // videos: fetched once, shared by drawers and the comparison grid
+  const V = {};
+  if (opt.video) {
+    let k = 0;
+    for (const r of shownRuns) {
+      const f = treeVideos(await treeFiles(r.name))[0]; if (!f) continue;
+      st(`${lang === "en" ? "Packing videos" : "영상 넣는 중"} ${++k}…`);
+      const b = await (await fetch(api.fileUrl(r.name, f.path))).blob();
+      V[r.name] = await new Promise((res) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.readAsDataURL(b); });
+    }
+  }
+  const B = treeBuild(shownRuns, lin, { order: "lineage", availW: 1400, seeds, hasVideo: (n) => !!V[n], lang });
+  const sides = {}; let i = 0;
+  for (const r of shownRuns) {
+    st(`${lang === "en" ? "Writing details" : "설명 만드는 중"} ${++i}/${shownRuns.length}…`);
+    sides[r.name] = await treeSideHTML(r, B.color(B.top(r)), { lin, shown, seeds, lang, videoLimit: 1, noImages: true, embedVideo: (n) => (V[n] ? `__VID__${n}` : null) });
+  }
+  const vidRuns = B.order.filter((n) => V[n]);
+  const card = (n) => { const r = byName.get(n), c = B.color(B.top(r)), hk = headKey(r), hs = [r, ...(seeds.get(n) || []).map((x) => byName.get(x))].map((x) => x?.summary?.last?.[hk]).filter((v) => typeof v === "number");
+    return `<figure class="vc" style="--vc:${c}"><figcaption><span class="vc-step" style="color:${c}">${esc(B.top(r))}</span><button type="button" class="vc-name" data-rt="${esc(n)}">${esc(n)}${hs.length > 1 ? ` ×${hs.length}` : ""}</button><span class="vc-chg">${esc(lin[n]?.change || "")}</span></figcaption>
+      <video data-vid="${esc(n)}" muted playsinline preload="metadata" controls></video>${hs.length ? `<div class="vc-m"><span class="mono">${esc(hk)}</span> <b>${fmtNum(hs.reduce((a, b) => a + b, 0) / hs.length)}</b>${hs.length > 1 ? ` <span>${T.seedMean(hs.length)}</span>` : ""}</div>` : ""}</figure>`; };
+  const cmpHTML = vidRuns.length ? `<section class="cmp"><h2>${lang === "en" ? "Videos side by side" : "영상 비교"}</h2><div class="cmp-ctl"><button type="button" data-cmp="play">${lang === "en" ? "▶ Play all together" : "▶ 모두 같이 재생"}</button><button type="button" data-cmp="pause">${lang === "en" ? "❚❚ Pause all" : "❚❚ 모두 정지"}</button><button type="button" data-cmp="restart">${lang === "en" ? "↺ Back to start" : "↺ 처음으로"}</button></div><div class="vgrid">${vidRuns.map(card).join("")}</div></section>` : "";
+  const parents = Object.fromEntries(Object.entries(lin).map(([k, v]) => [k, v.parent]));
+  const stamp = new Date().toISOString().slice(0, 10), title = state.config?.title || "Runboard";
+  const css = `:root{--bg:#f4f6f8;--surface:#fff;--surface-2:#eef1f4;--fg:#12161c;--fg-2:#4a5462;--muted:#6e7887;--line:#dde2e8;--good:#15803d}
+@media (prefers-color-scheme:dark){:root{--bg:#121519;--surface:#1a1e23;--surface-2:#22272e;--fg:#eef1f4;--fg-2:#c0c8d2;--muted:#8e98a5;--line:#2c333b;--good:#4ade80}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.55 system-ui,"Apple SD Gothic Neo","Malgun Gothic",sans-serif}header{padding:20px 24px 8px;max-width:1200px}h1{font-size:22px;margin:0 0 6px}header p{margin:4px 0;color:var(--fg-2)}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12.5px;color:var(--fg-2);padding:6px 24px 10px}.legend i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px;vertical-align:-1px}
+.canvas{margin:0 16px 24px;overflow-x:auto;border:1px solid var(--line);border-radius:8px;background:var(--surface)}.canvas svg{display:block}.canvas text{font-family:ui-monospace,monospace;font-size:10.5px;fill:var(--fg-2)}
+.tr-grp,.tr-sec-t{font-family:system-ui,sans-serif!important}.tr-grp{font-size:12px!important;font-weight:600}.tr-sec{fill:none;stroke:var(--fg-2);stroke-opacity:.35;stroke-dasharray:6 4}.tr-sec-t{font-size:14px!important;font-weight:700;fill:var(--fg)!important}.tr-grid{stroke:var(--line);stroke-dasharray:2 4}.tr-res,.tr-axis{fill:var(--muted)!important}
+.tr-run{cursor:pointer}.tr-run:hover .tr-lbl,.tr-run.sel .tr-lbl{fill:var(--fg);font-weight:600}.tr-run.sel .pt{stroke:var(--fg);stroke-width:2.5}
+aside{position:fixed;top:0;right:0;bottom:0;width:min(460px,100vw);overflow-y:auto;background:var(--surface);border-left:1px solid var(--line);box-shadow:-8px 0 24px rgba(0,0,0,.15);padding:14px 16px 40px;font-size:13px;display:flex;flex-direction:column;gap:8px;z-index:5}aside[hidden]{display:none}
+aside h4{margin:0;font-size:13.5px;overflow-wrap:anywhere}aside h5{margin:6px 0 0;font-size:12px;color:var(--muted)}.close{position:sticky;top:0;align-self:flex-end;margin-bottom:-28px;border:1px solid var(--line);background:var(--surface);color:var(--fg);border-radius:6px;padding:2px 10px;cursor:pointer;font:inherit}
+.tr-folder{font-size:12px;font-weight:600}.tr-nav{display:flex;flex-wrap:wrap;gap:4px;align-items:center}.tr-nav button{font:12px ui-monospace,monospace;border:1px solid var(--line);background:var(--surface);color:var(--fg);border-radius:4px;padding:1px 6px;cursor:pointer}
+.tr-goal{background:var(--surface-2);border-radius:6px;padding:6px 8px}.tr-verdict{border-left:3px solid var(--trc,var(--fg-2));background:var(--surface-2);border-radius:0 6px 6px 0;padding:4px 8px;white-space:pre-wrap}.tr-chg{color:var(--good);font-weight:600}.hint{font-size:11.5px;color:var(--muted)}.mono{font-family:ui-monospace,monospace}
+.tr-tbl{width:100%;border-collapse:collapse;font-size:12.5px}.tr-tbl td,.tr-tbl th{padding:2px 4px;text-align:right;border-bottom:1px solid var(--line);overflow-wrap:anywhere}.tr-tbl td:first-child,.tr-tbl th:first-child{text-align:left}.tr-plots svg{display:block;width:100%;height:auto}.tr-mini text{font-size:10px;fill:var(--muted)}video{width:100%;border-radius:6px;background:#000;display:block}
+.cmp{margin:0 16px 48px}.cmp h2{font-size:19px;margin:8px 0}.cmp-ctl{display:flex;gap:6px;margin:8px 0}.cmp-ctl button{font:inherit;font-size:13px;border:1px solid var(--line);background:var(--surface);color:var(--fg);border-radius:6px;padding:4px 12px;cursor:pointer}
+.vgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}.vc{margin:0;background:var(--surface);border:1px solid var(--line);border-top:4px solid var(--vc);border-radius:8px;padding:8px;display:flex;flex-direction:column;gap:6px}
+.vc figcaption{display:flex;flex-direction:column;gap:2px}.vc-step{font-size:11.5px;font-weight:600}.vc-name{all:unset;cursor:pointer;font:600 13px ui-monospace,monospace;overflow-wrap:anywhere}.vc-name:hover{text-decoration:underline}.vc-chg{font-size:12.5px;color:var(--fg-2)}.vc-m{font-size:12px;color:var(--fg-2)}.vc-m b{color:var(--fg)}`;
+  const script = `const S=${JSON.stringify(sides).replace(/</g, "\\u003c")},P=${JSON.stringify(parents).replace(/</g, "\\u003c")},C=${JSON.stringify(Object.fromEntries(shownRuns.map((r) => [r.name, B.color(B.top(r))])))},V=${JSON.stringify(V)};
+const side=document.getElementById("side"),fill=(h)=>h.replace(/__VID__([^"]+)/g,(m,k)=>V[k]||"");
+document.querySelectorAll("video[data-vid]").forEach(v=>{v.src=V[v.dataset.vid]||"";v.addEventListener("loadeddata",()=>{if(v.currentTime===0)v.currentTime=1;},{once:true});});
+function sel(n){const kin=new Set();if(n){kin.add(n);if(P[n])kin.add(P[n]);for(const k in P)if(P[k]===n)kin.add(k);}
+document.querySelectorAll(".tr-run").forEach(g=>{g.setAttribute("opacity",!n||kin.has(g.dataset.treeRun)?1:.3);g.classList.toggle("sel",g.dataset.treeRun===n);});
+document.querySelectorAll(".tr-edge").forEach(e=>{const on=n&&kin.has(e.dataset.a)&&kin.has(e.dataset.b);e.style.strokeOpacity=!n?"":on?1:.12;e.style.strokeWidth=on?3:"";});
+if(!n){side.hidden=true;return;}side.hidden=false;side.style.setProperty("--trc",C[n]);side.innerHTML='<button class="close" data-close>${lang === "en" ? "Close" : "닫기"} ✕</button>'+fill(S[n]);side.scrollTop=0;}
+const vids=()=>[...document.querySelectorAll(".cmp video")];
+document.addEventListener("click",e=>{if(e.target.closest("[data-close]"))return sel(null);const c=e.target.closest("[data-cmp]");if(c){const a=c.dataset.cmp;vids().forEach(v=>{if(a!=="pause")v.currentTime=0;if(a==="play")v.play();else v.pause();});return;}
+const g=e.target.closest("[data-tree-run],[data-rt]");if(g){const k=g.dataset.treeRun||g.dataset.rt;if(S[k])sel(k);}});
+document.addEventListener("keydown",e=>{if(e.key==="Escape")sel(null);const g=e.target.closest&&e.target.closest(".tr-run");if(g&&(e.key==="Enter"||e.key===" ")){e.preventDefault();sel(g.dataset.treeRun);}});`;
+  const how = lang === "en"
+    ? `<p>Training runs laid out by time and lineage. <b>Click a point</b> for its goal, what was changed, the verdict, key metrics against its parent and a training curve${vidRuns.length ? "; the videos are also side by side below the tree" : ""}.</p><p class="hint">x axis = time (point = start, bar = training span) · row = run · colour = top-level folder · link = made from the parent by changing a setting (dashed: seed only) · ×3 = same setting with 3 seeds (numbers are the mean)</p><p class="hint">${B.n} of ${all.length} runs · exported ${stamp} from ${esc(title)}</p>`
+    : `<p>학습 실행을 시간과 계보로 정리했습니다. <b>점을 누르면</b> 목적, 바꾼 것, 결과 평가, 부모 대비 핵심 지표, 학습 곡선이 열립니다${vidRuns.length ? ". 영상은 트리 아래에 나란히도 있습니다" : ""}.</p><p class="hint">가로 = 시간 (점은 시작, 막대는 학습 기간) · 줄 = 실행 · 색 = 맨 앞 폴더 · 연결선 = 부모에서 설정을 바꿔 이 실행을 함 (점선은 시드만 바꿈) · ×3 = 같은 설정을 시드 3개로 (숫자는 평균)</p><p class="hint">실행 ${B.n}개 표시 (전체 ${all.length}개) · ${stamp} ${esc(title)}에서 내보냄</p>`;
+  const html = `<!doctype html><html lang="${lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${lang === "en" ? "Training tree" : "학습 트리"} · ${esc(title)}</title><style>${css}</style></head><body>
+<header><h1>${lang === "en" ? "Training tree" : "학습 트리"} · ${esc(title)}</h1>${how}</header><div class="legend">${B.groups.map((g) => `<span><i style="background:${B.color(g)}"></i>${esc(g)}</span>`).join("")}</div>
+<div class="canvas">${B.svg}</div>${cmpHTML}<aside id="side" hidden></aside><script>${script}<\/script></body></html>`;
+  const blob = new Blob([html], { type: "text/html;charset=utf-8" }), a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = `${lang === "en" ? "training-tree" : "학습트리"}-${stamp}.html`; document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  st(`${lang === "en" ? "Downloaded" : "받았습니다"} (${(html.length / 1e6).toFixed(1)} MB, ${B.n} / ${vidRuns.length} ${lang === "en" ? "runs / videos" : "실행 / 영상"})`);
 }
 
 // ============================================================== GPUs
@@ -923,6 +1052,8 @@ function wire() {
   board.addEventListener("click", async (e) => {
     const bt = e.target.closest("[data-board-tab]"); if (bt) { state.boardTab = bt.dataset.boardTab; store.set("board-tab", state.boardTab); renderBoard(); return; }
     if (e.target.closest("[data-tree-close]")) { state.tree.sel = null; renderTree(); return; }
+    const sl = e.target.closest("[data-share-lang]"); if (sl) { state.tree.share.lang = sl.dataset.shareLang; sl.parentElement.querySelectorAll("[data-share-lang]").forEach((x) => x.setAttribute("aria-pressed", x === sl)); return; }
+    const ex = e.target.closest("[data-tree-export]"); if (ex) { ex.disabled = true; exportTree(state.tree.share).catch((err) => toast("만들지 못했습니다: " + err.message)).finally(() => { ex.disabled = false; }); return; }
     const to = e.target.closest("[data-tree-order]"); if (to) { state.tree.order = to.dataset.treeOrder; store.set("tree-order", state.tree.order); renderTree(); return; }
     if (e.target.closest("[data-tree-save]")) {
       const r = state.byName.get(state.tree.sel); if (!r) return;
@@ -932,7 +1063,10 @@ function wire() {
     }
     const tr = e.target.closest("[data-tree-run]"); if (tr) { state.tree.sel = tr.dataset.treeRun; renderTree(); }
   });
-  board.addEventListener("change", (e) => { if (e.target.id === "tree-archived") { state.tree.archived = e.target.checked; renderTree(); } });
+  board.addEventListener("change", (e) => {
+    if (e.target.id === "tree-archived") { state.tree.archived = e.target.checked; renderTree(); }
+    if (e.target.dataset?.share) state.tree.share[e.target.dataset.share] = e.target.checked;
+  });
   board.addEventListener("keydown", (e) => { const g = e.target.closest?.("[data-tree-run]"); if (g && g.tagName !== "BUTTON" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); state.tree.sel = g.dataset.treeRun; renderTree(); } });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && state.tree.sel && $("#tree-side")) { state.tree.sel = null; renderTree(); } });
   board.addEventListener("submit", (e) => {
