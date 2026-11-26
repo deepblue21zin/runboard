@@ -73,9 +73,11 @@ class ServerTest(unittest.TestCase):
 
     def test_notes_folders_board_reports(self):
         st, n = self.post("api/runs/a-s1/notes", {"star": True, "folder": "base/../x", "tags": ["t"], "color": 3,
-                                                 "parent": "group/b-s2", "change": "lr 1e-3 -> 3e-4", "verdict": "ok"})
+                                                 "parent": "group/b-s2", "change": "lr 1e-3 -> 3e-4", "verdict": "ok",
+                                                 "borrowed": [{"from": "group/b-s2", "note": "schedule"}, {"note": "no from"}], "final": True})
         self.assertEqual((st, n["star"], n["folder"], n["color"]), (200, True, "base/x", 3))
         self.assertEqual((n["parent"], n["change"], n["verdict"]), ("group/b-s2", "lr 1e-3 -> 3e-4", "ok"))   # 학습 트리
+        self.assertEqual((n["borrowed"], n["final"]), ([{"from": "group/b-s2", "note": "schedule"}], True))
         self.assertEqual(self.post("api/folders", {"folders": ["z", "a/b", "a/b"]})[1]["folders"], ["a/b", "z"])
         st, rec = self.post("api/board", {"rev": 0, "doc": {"goal": "g"}})
         self.assertEqual((st, rec["rev"]), (200, 1))

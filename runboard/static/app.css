@@ -267,6 +267,8 @@ td.diff { background: color-mix(in srgb, var(--s4) 12%, transparent); }
 .tr-canvas .tr-grp { font-family: inherit; font-size: 12px; font-weight: 600; }
 .tr-canvas .tr-res, .tr-canvas .tr-axis { fill: var(--muted); font-family: inherit; }
 .tr-plots svg { display: block; width: 100%; height: auto; }
+.tr-borrow { font-size: 12.5px; display: flex; flex-wrap: wrap; gap: 4px; align-items: baseline; }
+.tr-borrow button { font: 12px var(--font-mono, monospace); border: 1px solid var(--line); background: var(--surface); border-radius: 4px; padding: 0 6px; cursor: pointer; }
 .tr-share { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; background: var(--surface); }
 .tr-share summary { cursor: pointer; font-weight: 600; font-size: 13px; }
 .tr-share-body { display: flex; flex-direction: column; gap: 6px; padding: 6px 0 2px; }

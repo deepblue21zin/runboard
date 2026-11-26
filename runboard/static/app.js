@@ -639,13 +639,18 @@ const TREE_T = {
   ko: { noFolder: "폴더 없음", other: "기타", n: (k) => `${k}개`, seedMean: (k) => `(시드 ${k}개 평균)`, parent: "부모", next: "다음", root: "출발점 (부모 없음)", goal: "목적",
     change: "바꾼 것", vsParent: "(부모 대비)", verdict: "결과 평가", results: "핵심 결과 (마지막 20행)", metric: "지표", thisRun: "이 실행", graph: "그래프", files: "파일 (영상·이미지)",
     noFiles: "영상·이미지 파일이 없습니다", note: "메모", sameCfg: "설정은 부모와 같음 (시드·장치·이름 제외)", more: (k) => `외 ${k}개`, seeds: (k) => `같은 설정, 시드 ${k}개`, run: "실행",
-    meanSd: "평균 ± 표준편차", plusSeeds: (k) => `+ 시드 ${k}개`, noMetrics: "기록된 지표가 없습니다", locale: "ko-KR" },
+    meanSd: "평균 ± 표준편차", plusSeeds: (k) => `+ 시드 ${k}개`, noMetrics: "기록된 지표가 없습니다", locale: "ko-KR",
+    borrowedFrom: "아이디어를 가져온 실행", borrowedBy: "이 실행의 아이디어를 가져간 실행", final: "★ 최종 비교", finalHead: "최종 비교",
+    finalNote: "프로젝트가 최종으로 비교하는 실행 (✓ 최종 비교로 표시한 실행). 숫자는 마지막 20행, ×N은 시드 평균 ± 표준편차.", playBoth: "▶ 같이 재생", pause: "❚❚ 정지" },
   en: { noFolder: "No folder", other: "Other", n: (k) => `${k} runs`, seedMean: (k) => `(mean of ${k} seeds)`, parent: "Parent", next: "Next", root: "Starting point (no parent)", goal: "Goal",
     change: "What changed", vsParent: "(vs parent)", verdict: "Verdict", results: "Key results (last 20 rows)", metric: "Metric", thisRun: "This run", graph: "Chart", files: "Files (video, images)",
     noFiles: "No video or image files", note: "Note", sameCfg: "Settings same as the parent (seed, device and name aside)", more: (k) => `${k} more`, seeds: (k) => `Same setting, ${k} seeds`, run: "Run",
-    meanSd: "Mean ± SD", plusSeeds: (k) => `+ ${k} seeds`, noMetrics: "No metrics logged", locale: "en-US" },
+    meanSd: "Mean ± SD", plusSeeds: (k) => `+ ${k} seeds`, noMetrics: "No metrics logged", locale: "en-US",
+    borrowedFrom: "Idea taken from", borrowedBy: "Ideas reused in", final: "★ final comparison", finalHead: "Final comparison",
+    finalNote: "The runs the project finally compares (marked as final). Numbers: last 20 rows; ×N = mean ± SD over seeds.", playBoth: "▶ Play together", pause: "❚❚ Pause" },
 };
-const treeLin = (runs) => Object.fromEntries(runs.map((r) => [r.name, { parent: r.notes?.parent || "", change: r.notes?.change || "", verdict: r.notes?.verdict || "" }]));
+const treeLin = (runs) => Object.fromEntries(runs.map((r) => [r.name, { parent: r.notes?.parent || "", change: r.notes?.change || "", verdict: r.notes?.verdict || "",
+  borrowed: r.notes?.borrowed || [], final: !!r.notes?.final }]));
 const headKey = (r) => state.config?.headline?.[0] || Object.keys(r?.summary?.last || {}).find((k) => !META_KEYS.has(k));
 // o: {sel, order, availW, seeds: Map(head -> [runs]), hasVideo, lang, allGroups}
 function treeBuild(runs, lin, o = {}) {
@@ -698,12 +703,20 @@ function treeBuild(runs, lin, o = {}) {
   for (let t = g0.getTime() / 1000; t <= t1; t += stepT) { const x = X(t); if (x < L - 1) continue;
     grid += `<line x1="${x}" x2="${x}" y1="${top0 - 8}" y2="${H}" class="tr-grid"/><text x="${x + 3}" y="${top0 - 14}" class="tr-axis">${new Date(t * 1000).toLocaleString(T.locale, stepT === day ? { month: "numeric", day: "numeric", weekday: "short" } : { month: "numeric", day: "numeric", hour: "2-digit" })}</text>`; }
   const sel = o.sel && pos.has(o.sel) ? o.sel : null;
-  const kin = new Set(); if (sel) { kin.add(sel); const p = lin[sel]?.parent; if (p) kin.add(p); rows.forEach(({ r }) => { if (lin[r.name]?.parent === sel) kin.add(r.name); }); }
+  const bor = (n) => (lin[n]?.borrowed || []).map((b) => b.from);
+  const kin = new Set(); if (sel) { kin.add(sel); const p = lin[sel]?.parent; if (p) kin.add(p); rows.forEach(({ r }) => { if (lin[r.name]?.parent === sel) kin.add(r.name); });
+    bor(sel).forEach((f) => kin.add(f)); rows.forEach(({ r }) => { if (bor(r.name).includes(sel)) kin.add(r.name); }); }
   let bands = "", edges = "", pts = "", labels = "";
   for (const s of sInfo) bands += `<rect x="1" y="${s.y0}" width="${W - 2}" height="${s.y1 - s.y0}" rx="10" class="tr-sec"/><text x="14" y="${s.y0 + 19}" class="tr-sec-t">${esc(s.title)} · ${T.n(s.n)}</text>`;
   for (const gi of gInfo) { const c = color(gi.g);
     bands += `<rect x="4" y="${gi.y0 - 4}" width="${W - 8}" height="${gi.y1 - gi.y0 + 8}" rx="8" fill="${c}" fill-opacity=".06"/><rect x="4" y="${gi.y0 - 4}" width="4" height="${gi.y1 - gi.y0 + 8}" rx="2" fill="${c}"/>`;
     labels += `<text x="16" y="${gi.y0 + 13}" class="tr-grp" fill="${c}">${esc(gi.g)}</text>`; }
+  // ideas taken from another run (not the parent): thin grey dashed arrows
+  for (const { r, y } of rows) for (const f of bor(r.name)) {
+    const pf = pos.get(f); if (!pf) continue;
+    const xa = X(runStart(pf.r)) + 5, xb = X(runStart(r)) - 8, on = sel && kin.has(r.name) && kin.has(f);
+    edges += `<path class="tr-edge" data-a="${esc(f)}" data-b="${esc(r.name)}" d="${xb - xa < 2 ? `M${xa},${pf.y} V${y}` : `M${xa},${pf.y} V${y} H${xb}`}" fill="none" stroke="var(--fg-2)" stroke-width="${on ? 2 : 1.2}" stroke-opacity="${sel && !on ? 0.12 : 0.55}" stroke-dasharray="2 3" marker-end="url(#tr-bor)"/>`;
+  }
   for (const { r, y, g } of rows) {
     const p = lin[r.name]?.parent, pp = p && pos.get(p); if (!pp) continue;
     const seed = isSeedChange(lin[r.name]?.change), xa = X(runStart(pp.r)), xb = X(runStart(r)), ya = pp.y, on = sel && kin.has(r.name) && kin.has(p);
@@ -719,11 +732,13 @@ function treeBuild(runs, lin, o = {}) {
     const nm = r.name + (heads.length > 1 ? ` ×${heads.length}` : "");
     pts += `<g class="tr-run ${sel === r.name ? "sel" : ""}" data-tree-run="${esc(r.name)}" tabindex="0" role="button" opacity="${dim ? 0.35 : 1}">`
       + `<line x1="${x}" x2="${Math.max(xe, x + 2)}" y1="${y}" y2="${y}" stroke="${c}" stroke-width="5" stroke-opacity=".35" stroke-linecap="round"/>`
+      + (lin[r.name]?.final ? `<circle cx="${x}" cy="${y}" r="11" fill="none" stroke="#d97706" stroke-width="2"/>` : "")
       + `<circle class="pt" cx="${x}" cy="${y}" r="6" fill="${bad ? "var(--surface)" : c}" stroke="${c}" stroke-width="2"/>`
-      + `<text class="tr-lbl" x="${Math.max(xe, x) + 10}" y="${y + 4}">${esc(nm)}${r.status === "running" ? " ⏳" : ""}${o.hasVideo && o.hasVideo(r.name) ? " ▶" : ""}${res ? `<tspan class="tr-res" dx="14">${esc(res)}</tspan>` : ""}</text>`
+      + `<text class="tr-lbl" x="${Math.max(xe, x) + 10}" y="${y + 4}">${esc(nm)}${r.status === "running" ? " ⏳" : ""}${o.hasVideo && o.hasVideo(r.name) ? " ▶" : ""}${res ? `<tspan class="tr-res" dx="14">${esc(res)}</tspan>` : ""}${lin[r.name]?.final ? `<tspan dx="12" style="fill:#b45309;font-weight:700">${T.final}</tspan>` : ""}</text>`
       + `<title>${esc(r.name)}${lin[r.name]?.change ? "\n" + esc(lin[r.name].change) : ""}${lin[r.name]?.verdict ? "\n" + esc(lin[r.name].verdict) : ""}</title></g>`;
   }
-  return { svg: `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="training tree">${bands}${grid}${edges}${pts}${labels}</svg>`,
+  const defs = `<defs><marker id="tr-bor" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--fg-2)" fill-opacity=".7"/></marker></defs>`;
+  return { svg: `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="training tree">${defs}${bands}${grid}${edges}${pts}${labels}</svg>`,
     groups: allGroups, color, n: rows.length, order: rows.map((x) => x.r.name), top };
 }
 function renderTree() {
@@ -791,10 +806,14 @@ async function treeSideHTML(r, c, ctx) {
   const vsrc = await Promise.all(vids.slice(0, ctx.videoLimit || 3).map((f) => (ctx.embedVideo ? ctx.embedVideo(r.name, f) : api.fileUrl(r.name, f.path))));
   const files = vids.slice(0, ctx.videoLimit || 3).map((f, i) => (vsrc[i] ? `<video src="${vsrc[i]}" controls preload="metadata" playsinline></video><span class="hint mono">${esc(f.path)}</span>` : "")).join("")
     + (imgs.length && !ctx.noImages ? `<div class="tr-imgs">${imgs.slice(-4).map((f) => `<img src="${api.fileUrl(r.name, f.path)}" alt="${esc(f.path)}" loading="lazy">`).join("")}</div>` : "");
+  const btn = (k) => (!ctx.shown || ctx.shown.has(k) ? `<button type="button" data-tree-run="${esc(k)}">${esc(k)}</button>` : `<span class="mono">${esc(k)}</span>`);
+  const bFrom = (me.borrowed || []).map((b) => `<div class="tr-borrow">← ${btn(b.from)} <span>${esc(b.note || "")}</span></div>`).join("");
+  const bBy = Object.entries(ctx.linAll || lin).flatMap(([k, v]) => (v.borrowed || []).filter((b) => b.from === r.name).map((b) => `<div class="tr-borrow">→ ${btn(k)} <span>${esc(b.note || "")}</span></div>`)).join("");
+  const borHTML = (bFrom ? `<h5>${T.borrowedFrom}</h5>${bFrom}` : "") + (bBy ? `<h5>${T.borrowedBy}</h5>${bBy}` : "");
   return `<div class="tr-folder" style="color:${c}">${esc(n.folder || T.noFolder)}</div><h4 class="mono">${esc(r.name)}${seeds.length ? ` <span class="hint">${T.plusSeeds(seeds.length)}</span>` : ""}</h4>
     <div class="tr-nav">${par ? `<span class="hint">${T.parent}</span><button type="button" data-tree-run="${esc(par)}">↑ ${esc(par)}</button>` : `<span class="hint">${T.root}</span>`}${kids.length ? `<span class="hint">${T.next}</span>${kids.map((k) => `<button type="button" data-tree-run="${esc(k)}">↓ ${esc(k)}</button>`).join("")}` : ""}</div>
     ${n.goal ? `<h5>${T.goal}</h5><div class="tr-goal">${esc(n.goal)}</div>` : ""}
-    <h5>${T.change} ${par ? `<span class="hint">${T.vsParent}</span>` : ""}</h5><div>${esc(me.change || "–")}</div>${diff}
+    <h5>${T.change} ${par ? `<span class="hint">${T.vsParent}</span>` : ""}</h5><div>${esc(me.change || "–")}</div>${diff}${borHTML}
     <h5>${T.verdict}</h5><div class="tr-verdict">${esc(me.verdict || "–")}</div>
     <h5>${T.results}</h5>${res}
     <h5>${T.graph}</h5><div class="tr-plots">${plot}</div>
@@ -813,6 +832,8 @@ async function renderTreeSide(r, c) {
       <label>부모 실행<select class="field" id="tree-e-parent"><option value="">(없음: 출발점)</option>${state.runs.filter((x) => x.name !== r.name).map((x) => `<option ${x.name === n.parent ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></label>
       <label>바꾼 것 <span class="hint">"시드만 다름"으로 쓰면 점선</span><input class="field" id="tree-e-change" value="${esc(n.change || "")}" placeholder="예: 학습률 1e-3 → 3e-4"></label>
       <label>결과 평가<textarea class="field" id="tree-e-verdict" placeholder="예: 채택. 검증 정확도 +2%p">${esc(n.verdict || "")}</textarea></label>
+      <label>아이디어를 가져온 실행 <span class="hint">한 줄에 하나: 실행이름: 가져온 것 (회색 점선 화살표)</span><textarea class="field" id="tree-e-borrowed" placeholder="baseline-s1: 학습률 스케줄">${esc((n.borrowed || []).map((b) => b.from + (b.note ? ": " + b.note : "")).join("\n"))}</textarea></label>
+      <label class="toggle"><input type="checkbox" id="tree-e-final" ${n.final ? "checked" : ""}> 최종 비교 대상 (★ 표시, 공유 파일 맨 위 "최종 비교")</label>
       <button class="btn primary" type="button" data-tree-save>저장</button></details>
     <a class="btn" href="?project=${encodeURIComponent(state.project)}&run=${encodeURIComponent(r.name)}#runs">실행 화면에서 보기</a>`;
 }
@@ -858,7 +879,7 @@ async function exportTree(opt) {
   const sides = {}; let i = 0;
   for (const r of shownRuns) {
     st(`${lang === "en" ? "Writing details" : "설명 만드는 중"} ${++i}/${shownRuns.length}…`);
-    sides[r.name] = await treeSideHTML(r, B.color(B.top(r)), { lin, shown, seeds, lang, videoLimit: 1, noImages: true, embedVideo: (n) => (V[n] ? `__VID__${n}` : null) });
+    sides[r.name] = await treeSideHTML(r, B.color(B.top(r)), { lin, linAll: lin0, shown, seeds, lang, videoLimit: 1, noImages: true, embedVideo: (n) => (V[n] ? `__VID__${n}` : null) });
   }
   const vidRuns = B.order.filter((n) => V[n]);
   const card = (n) => { const r = byName.get(n), c = B.color(B.top(r)), hk = headKey(r), hs = [r, ...(seeds.get(n) || []).map((x) => byName.get(x))].map((x) => x?.summary?.last?.[hk]).filter((v) => typeof v === "number");
@@ -866,6 +887,14 @@ async function exportTree(opt) {
       <video data-vid="${esc(n)}" muted playsinline preload="metadata" controls></video>${hs.length ? `<div class="vc-m"><span class="mono">${esc(hk)}</span> <b>${fmtNum(hs.reduce((a, b) => a + b, 0) / hs.length)}</b>${hs.length > 1 ? ` <span>${T.seedMean(hs.length)}</span>` : ""}</div>` : ""}</figure>`; };
   const cmpHTML = vidRuns.length ? `<section class="cmp"><h2>${lang === "en" ? "Videos side by side" : "영상 비교"}</h2><div class="cmp-ctl"><button type="button" data-cmp="play">${lang === "en" ? "▶ Play all together" : "▶ 모두 같이 재생"}</button><button type="button" data-cmp="pause">${lang === "en" ? "❚❚ Pause all" : "❚❚ 모두 정지"}</button><button type="button" data-cmp="restart">${lang === "en" ? "↺ Back to start" : "↺ 처음으로"}</button></div><div class="vgrid">${vidRuns.map(card).join("")}</div></section>` : "";
   const parents = Object.fromEntries(Object.entries(lin).map(([k, v]) => [k, v.parent]));
+  const borrows = Object.fromEntries(Object.entries(lin).map(([k, v]) => [k, (v.borrowed || []).map((b) => b.from).filter((f) => shown.has(f))]));
+  // "final comparison": the runs marked final, side by side at the top (video + headline metrics, seed mean ± SD)
+  const finals = shownRuns.filter((r) => lin[r.name]?.final).slice(0, 4);
+  const hkeys = (r) => ((state.config?.headline || []).length ? state.config.headline : Object.keys(r.summary?.last || {}).filter((k) => !META_KEYS.has(k))).slice(0, 5);
+  const msd = (n, k) => { const v = [n, ...(seeds.get(n) || [])].map((x) => byName.get(x)?.summary?.last?.[k]).filter((x) => typeof x === "number"); if (!v.length) return "–"; const m = v.reduce((a, b) => a + b, 0) / v.length; const sd = v.length > 1 ? Math.sqrt(v.reduce((a, b) => a + (b - m) ** 2, 0) / (v.length - 1)) : 0; return fmtNum(m) + (v.length > 1 ? " ± " + fmtNum(sd) : ""); };
+  const finalHTML = finals.length ? `<section class="final"><h2>${T.finalHead}</h2><p class="hint">${T.finalNote}</p><div class="final-grid">${finals.map((r) => `<figure class="vc" style="--vc:${B.color(B.top(r))}"><figcaption><span class="vc-step" style="color:${B.color(B.top(r))}">${esc(B.top(r))}</span><button type="button" class="vc-name" data-rt="${esc(r.name)}">${esc(r.name)}${(seeds.get(r.name) || []).length ? ` ×${1 + seeds.get(r.name).length}` : ""}</button></figcaption>
+    ${V[r.name] ? `<video data-vid="${esc(r.name)}" class="final-v" muted playsinline preload="metadata" controls></video>` : ""}<table class="tr-tbl"><tbody>${hkeys(r).map((k) => `<tr><td class="mono">${esc(k)}</td><td><b>${msd(r.name, k)}</b></td></tr>`).join("")}</tbody></table></figure>`).join("")}</div>
+    ${finals.filter((r) => V[r.name]).length > 1 ? `<div class="cmp-ctl"><button type="button" data-final="play">${T.playBoth}</button><button type="button" data-final="pause">${T.pause}</button></div>` : ""}</section>` : "";
   const stamp = new Date().toISOString().slice(0, 10), title = state.config?.title || "Runboard";
   const css = `:root{--bg:#f4f6f8;--surface:#fff;--surface-2:#eef1f4;--fg:#12161c;--fg-2:#4a5462;--muted:#6e7887;--line:#dde2e8;--good:#15803d}
 @media (prefers-color-scheme:dark){:root{--bg:#121519;--surface:#1a1e23;--surface-2:#22272e;--fg:#eef1f4;--fg-2:#c0c8d2;--muted:#8e98a5;--line:#2c333b;--good:#4ade80}}
@@ -879,26 +908,28 @@ aside h4{margin:0;font-size:13.5px;overflow-wrap:anywhere}aside h5{margin:6px 0 
 .tr-folder{font-size:12px;font-weight:600}.tr-nav{display:flex;flex-wrap:wrap;gap:4px;align-items:center}.tr-nav button{font:12px ui-monospace,monospace;border:1px solid var(--line);background:var(--surface);color:var(--fg);border-radius:4px;padding:1px 6px;cursor:pointer}
 .tr-goal{background:var(--surface-2);border-radius:6px;padding:6px 8px}.tr-verdict{border-left:3px solid var(--trc,var(--fg-2));background:var(--surface-2);border-radius:0 6px 6px 0;padding:4px 8px;white-space:pre-wrap}.tr-chg{color:var(--good);font-weight:600}.hint{font-size:11.5px;color:var(--muted)}.mono{font-family:ui-monospace,monospace}
 .tr-tbl{width:100%;border-collapse:collapse;font-size:12.5px}.tr-tbl td,.tr-tbl th{padding:2px 4px;text-align:right;border-bottom:1px solid var(--line);overflow-wrap:anywhere}.tr-tbl td:first-child,.tr-tbl th:first-child{text-align:left}.tr-plots svg{display:block;width:100%;height:auto}.tr-mini text{font-size:10px;fill:var(--muted)}video{width:100%;border-radius:6px;background:#000;display:block}
+.final{margin:0 16px 20px}.final h2{font-size:19px;margin:8px 0 4px}.final-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;max-width:1100px}.final .vc{border-top-width:5px}
+.tr-borrow{font-size:12.5px;display:flex;flex-wrap:wrap;gap:4px;align-items:baseline}.tr-borrow button{font:12px ui-monospace,monospace;border:1px solid var(--line);background:var(--surface);color:var(--fg);border-radius:4px;padding:0 6px;cursor:pointer}
 .cmp{margin:0 16px 48px}.cmp h2{font-size:19px;margin:8px 0}.cmp-ctl{display:flex;gap:6px;margin:8px 0}.cmp-ctl button{font:inherit;font-size:13px;border:1px solid var(--line);background:var(--surface);color:var(--fg);border-radius:6px;padding:4px 12px;cursor:pointer}
 .vgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}.vc{margin:0;background:var(--surface);border:1px solid var(--line);border-top:4px solid var(--vc);border-radius:8px;padding:8px;display:flex;flex-direction:column;gap:6px}
 .vc figcaption{display:flex;flex-direction:column;gap:2px}.vc-step{font-size:11.5px;font-weight:600}.vc-name{all:unset;cursor:pointer;font:600 13px ui-monospace,monospace;overflow-wrap:anywhere}.vc-name:hover{text-decoration:underline}.vc-chg{font-size:12.5px;color:var(--fg-2)}.vc-m{font-size:12px;color:var(--fg-2)}.vc-m b{color:var(--fg)}`;
-  const script = `const S=${JSON.stringify(sides).replace(/</g, "\\u003c")},P=${JSON.stringify(parents).replace(/</g, "\\u003c")},C=${JSON.stringify(Object.fromEntries(shownRuns.map((r) => [r.name, B.color(B.top(r))])))},V=${JSON.stringify(V)};
+  const script = `const S=${JSON.stringify(sides).replace(/</g, "\\u003c")},P=${JSON.stringify(parents).replace(/</g, "\\u003c")},C=${JSON.stringify(Object.fromEntries(shownRuns.map((r) => [r.name, B.color(B.top(r))])))},V=${JSON.stringify(V)},BR=${JSON.stringify(borrows)};
 const side=document.getElementById("side"),fill=(h)=>h.replace(/__VID__([^"]+)/g,(m,k)=>V[k]||"");
 document.querySelectorAll("video[data-vid]").forEach(v=>{v.src=V[v.dataset.vid]||"";v.addEventListener("loadeddata",()=>{if(v.currentTime===0)v.currentTime=1;},{once:true});});
-function sel(n){const kin=new Set();if(n){kin.add(n);if(P[n])kin.add(P[n]);for(const k in P)if(P[k]===n)kin.add(k);}
+function sel(n){const kin=new Set();if(n){kin.add(n);if(P[n])kin.add(P[n]);for(const k in P)if(P[k]===n)kin.add(k);(BR[n]||[]).forEach(f=>kin.add(f));for(const k in BR)if(BR[k].includes(n))kin.add(k);}
 document.querySelectorAll(".tr-run").forEach(g=>{g.setAttribute("opacity",!n||kin.has(g.dataset.treeRun)?1:.3);g.classList.toggle("sel",g.dataset.treeRun===n);});
 document.querySelectorAll(".tr-edge").forEach(e=>{const on=n&&kin.has(e.dataset.a)&&kin.has(e.dataset.b);e.style.strokeOpacity=!n?"":on?1:.12;e.style.strokeWidth=on?3:"";});
 if(!n){side.hidden=true;return;}side.hidden=false;side.style.setProperty("--trc",C[n]);side.innerHTML='<button class="close" data-close>${lang === "en" ? "Close" : "닫기"} ✕</button>'+fill(S[n]);side.scrollTop=0;}
 const vids=()=>[...document.querySelectorAll(".cmp video")];
-document.addEventListener("click",e=>{if(e.target.closest("[data-close]"))return sel(null);const c=e.target.closest("[data-cmp]");if(c){const a=c.dataset.cmp;vids().forEach(v=>{if(a!=="pause")v.currentTime=0;if(a==="play")v.play();else v.pause();});return;}
+document.addEventListener("click",e=>{if(e.target.closest("[data-close]"))return sel(null);const fb=e.target.closest("[data-final]");if(fb){document.querySelectorAll(".final-v").forEach(v=>{if(fb.dataset.final==="play"){v.currentTime=0;v.play();}else v.pause();});return;}const c=e.target.closest("[data-cmp]");if(c){const a=c.dataset.cmp;vids().forEach(v=>{if(a!=="pause")v.currentTime=0;if(a==="play")v.play();else v.pause();});return;}
 const g=e.target.closest("[data-tree-run],[data-rt]");if(g){const k=g.dataset.treeRun||g.dataset.rt;if(S[k])sel(k);}});
 document.addEventListener("keydown",e=>{if(e.key==="Escape")sel(null);const g=e.target.closest&&e.target.closest(".tr-run");if(g&&(e.key==="Enter"||e.key===" ")){e.preventDefault();sel(g.dataset.treeRun);}});`;
   const how = lang === "en"
-    ? `<p>Training runs laid out by time and lineage. <b>Click a point</b> for its goal, what was changed, the verdict, key metrics against its parent and a training curve${vidRuns.length ? "; the videos are also side by side below the tree" : ""}.</p><p class="hint">x axis = time (point = start, bar = training span) · row = run · colour = top-level folder · link = made from the parent by changing a setting (dashed: seed only) · ×3 = same setting with 3 seeds (numbers are the mean)</p><p class="hint">${B.n} of ${all.length} runs · exported ${stamp} from ${esc(title)}</p>`
-    : `<p>학습 실행을 시간과 계보로 정리했습니다. <b>점을 누르면</b> 목적, 바꾼 것, 결과 평가, 부모 대비 핵심 지표, 학습 곡선이 열립니다${vidRuns.length ? ". 영상은 트리 아래에 나란히도 있습니다" : ""}.</p><p class="hint">가로 = 시간 (점은 시작, 막대는 학습 기간) · 줄 = 실행 · 색 = 맨 앞 폴더 · 연결선 = 부모에서 설정을 바꿔 이 실행을 함 (점선은 시드만 바꿈) · ×3 = 같은 설정을 시드 3개로 (숫자는 평균)</p><p class="hint">실행 ${B.n}개 표시 (전체 ${all.length}개) · ${stamp} ${esc(title)}에서 내보냄</p>`;
+    ? `<p>Training runs laid out by time and lineage. <b>Click a point</b> for its goal, what was changed, the verdict, key metrics against its parent and a training curve${vidRuns.length ? "; the videos are also side by side below the tree" : ""}.</p><p class="hint">x axis = time (point = start, bar = training span) · row = run · colour = top-level folder · link = made from the parent by changing a setting (dashed: seed only) · grey dashed arrow = an idea taken from another run · ×3 = same setting with 3 seeds (numbers are the mean)</p><p class="hint">${B.n} of ${all.length} runs · exported ${stamp} from ${esc(title)}</p>`
+    : `<p>학습 실행을 시간과 계보로 정리했습니다. <b>점을 누르면</b> 목적, 바꾼 것, 결과 평가, 부모 대비 핵심 지표, 학습 곡선이 열립니다${vidRuns.length ? ". 영상은 트리 아래에 나란히도 있습니다" : ""}.</p><p class="hint">가로 = 시간 (점은 시작, 막대는 학습 기간) · 줄 = 실행 · 색 = 맨 앞 폴더 · 연결선 = 부모에서 설정을 바꿔 이 실행을 함 (점선은 시드만 바꿈) · 회색 점선 화살표 = 다른 실행에서 가져온 아이디어 · ×3 = 같은 설정을 시드 3개로 (숫자는 평균)</p><p class="hint">실행 ${B.n}개 표시 (전체 ${all.length}개) · ${stamp} ${esc(title)}에서 내보냄</p>`;
   const html = `<!doctype html><html lang="${lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${lang === "en" ? "Training tree" : "학습 트리"} · ${esc(title)}</title><style>${css}</style></head><body>
 <header><h1>${lang === "en" ? "Training tree" : "학습 트리"} · ${esc(title)}</h1>${how}</header><div class="legend">${B.groups.map((g) => `<span><i style="background:${B.color(g)}"></i>${esc(g)}</span>`).join("")}</div>
-<div class="canvas">${B.svg}</div>${cmpHTML}<aside id="side" hidden></aside><script>${script}<\/script></body></html>`;
+${finalHTML}<div class="canvas">${B.svg}</div>${cmpHTML}<aside id="side" hidden></aside><script>${script}<\/script></body></html>`;
   const blob = new Blob([html], { type: "text/html;charset=utf-8" }), a = document.createElement("a");
   a.href = URL.createObjectURL(blob); a.download = `${lang === "en" ? "training-tree" : "학습트리"}-${stamp}.html`; document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
   st(`${lang === "en" ? "Downloaded" : "받았습니다"} (${(html.length / 1e6).toFixed(1)} MB, ${B.n} / ${vidRuns.length} ${lang === "en" ? "runs / videos" : "실행 / 영상"})`);
@@ -1057,7 +1088,8 @@ function wire() {
     const to = e.target.closest("[data-tree-order]"); if (to) { state.tree.order = to.dataset.treeOrder; store.set("tree-order", state.tree.order); renderTree(); return; }
     if (e.target.closest("[data-tree-save]")) {
       const r = state.byName.get(state.tree.sel); if (!r) return;
-      try { await saveNotes(r, { parent: $("#tree-e-parent").value, change: $("#tree-e-change").value.trim(), verdict: $("#tree-e-verdict").value.trim() }); toast("저장했습니다"); renderTree(); }
+      const borrowed = $("#tree-e-borrowed").value.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => { const i = l.indexOf(":"); return i < 0 ? { from: l, note: "" } : { from: l.slice(0, i).trim(), note: l.slice(i + 1).trim() }; });
+      try { await saveNotes(r, { parent: $("#tree-e-parent").value, change: $("#tree-e-change").value.trim(), verdict: $("#tree-e-verdict").value.trim(), borrowed, final: $("#tree-e-final").checked }); toast("저장했습니다"); renderTree(); }
       catch (err) { toast("저장하지 못했습니다: " + err.message); }
       return;
     }

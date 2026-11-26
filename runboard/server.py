@@ -423,6 +423,11 @@ class Handler(BaseHTTPRequestHandler):
                          # 학습 트리: which run this one came from, what was changed, and the verdict
                          "parent": str(data.get("parent") or "")[:200], "change": str(data.get("change") or "")[:500],
                          "verdict": str(data.get("verdict") or "")[:2000],
+                         # ideas taken from other runs (not the parent): [{"from": run, "note": text}], and the
+                         # runs the project finally compares (badge + "final comparison" block in the shared file)
+                         "borrowed": [{"from": str(b.get("from") or "")[:200], "note": str(b.get("note") or "")[:300]}
+                                      for b in (data.get("borrowed") or []) if isinstance(b, dict) and b.get("from")][:10],
+                         "final": bool(data.get("final")),
                          "color": int(color) if str(color or "").isdigit() and 1 <= int(color) <= 8 else None,
                          "updated_time": time.time()}
                 write_json(os.path.join(d, "notes.json"), notes)
