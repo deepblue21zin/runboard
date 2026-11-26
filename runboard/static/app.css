@@ -253,6 +253,48 @@ td.diff { background: color-mix(in srgb, var(--s4) 12%, transparent); }
 .board-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 16px; align-items: start; }
 @media (max-width: 1000px) { .board-grid { grid-template-columns: minmax(0, 1fr); } }
 .goal-input { font-size: 15px; }
+/* board sub-tabs and 학습 트리 */
+.board-tabs { display: flex; gap: 6px; }
+.board-tabs button { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 4px 14px; font: inherit; font-size: 13px; cursor: pointer; color: var(--fg-2); }
+.board-tabs button[aria-selected="true"] { background: var(--fg); color: var(--surface); border-color: var(--fg); }
+.board.board-wide { max-width: none; }
+.tr-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; font-size: 12.5px; color: var(--fg-2); }
+.tr-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
+.tr-ctl { margin-left: auto; display: inline-flex; gap: 6px; align-items: center; }
+.tr-canvas { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.tr-canvas svg { display: block; }
+.tr-canvas text { font-family: var(--font-mono, monospace); font-size: 10.5px; fill: var(--fg-2); }
+.tr-canvas .tr-grp { font-family: inherit; font-size: 12px; font-weight: 600; }
+.tr-canvas .tr-res, .tr-canvas .tr-axis { fill: var(--muted); }
+.tr-canvas .tr-grid { stroke: var(--line); stroke-dasharray: 2 4; }
+.tr-canvas .tr-sec { fill: none; stroke: var(--fg-2); stroke-opacity: .35; stroke-dasharray: 6 4; }
+.tr-canvas .tr-sec-t { font-family: inherit; font-size: 14px; font-weight: 700; fill: var(--fg); }
+.tr-run { cursor: pointer; }
+.tr-run:hover .tr-lbl, .tr-run.sel .tr-lbl { fill: var(--fg); font-weight: 600; }
+.tr-run.sel .pt { stroke: var(--fg); stroke-width: 2.5; }
+.tr-run:focus-visible { outline: none; } .tr-run:focus-visible .pt { stroke: var(--accent); stroke-width: 3; }
+.tr-side { position: fixed; top: 56px; right: 0; bottom: 0; width: min(460px, 100vw); z-index: 20; overflow-y: auto; background: var(--surface); border-left: 1px solid var(--line);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, .12); padding: 14px 16px 40px; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.tr-side[hidden] { display: none; }
+.tr-side h4 { margin: 0; font-size: 13.5px; overflow-wrap: anywhere; }
+.tr-side h5 { margin: 6px 0 0; font-size: 12px; color: var(--muted); font-weight: 600; }
+.tr-close { position: sticky; top: 0; align-self: flex-end; margin-bottom: -28px; }
+.tr-folder { font-size: 12px; font-weight: 600; }
+.tr-nav { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.tr-nav button { font: inherit; font-size: 12px; border: 1px solid var(--line); background: var(--surface); border-radius: 4px; padding: 1px 6px; cursor: pointer; }
+.tr-goal { background: var(--surface-2); border-radius: 6px; padding: 6px 8px; }
+.tr-verdict { border-left: 3px solid var(--trc, var(--fg-2)); background: var(--surface-2); border-radius: 0 6px 6px 0; padding: 4px 8px; white-space: pre-wrap; }
+.tr-chg { color: var(--good); font-weight: 600; }
+.tr-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.tr-tbl td, .tr-tbl th { padding: 2px 4px; text-align: right; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.tr-tbl td:first-child, .tr-tbl th:first-child { text-align: left; }
+.tr-mini text { font-size: 10px; fill: var(--muted); }
+.tr-side video { width: 100%; border-radius: 6px; background: #000; }
+.tr-imgs { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+.tr-imgs img { width: 100%; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-2); }
+.tr-edit { border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+.tr-edit summary { cursor: pointer; font-weight: 600; font-size: 12.5px; }
+.tr-edit label { display: flex; flex-direction: column; gap: 3px; margin: 6px 0; font-size: 12px; color: var(--fg-2); }
 .add-row { display: flex; flex-wrap: wrap; gap: 6px; }
 .add-row input { flex: 1 1 200px; }
 .add-row input, .add-row select { padding: 6px 9px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--bg); }

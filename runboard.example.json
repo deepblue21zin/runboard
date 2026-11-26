@@ -5,5 +5,6 @@
   ],
   "headline": [],
   "stale_minutes": 10,
-  "plugins": ["files"]
+  "plugins": ["files"],
+  "tree_sections": []
 }

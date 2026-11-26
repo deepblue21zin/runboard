@@ -25,10 +25,10 @@ def sample_svg(step, acc):
             f'<text x="10" y="20" font-family="monospace" font-size="12">step {step}  acc {acc:.3f}</text></svg>')
 
 
-def fake_run(logdir, name, lr, seed, steps, delay=0.0, goal=None):
+def fake_run(logdir, name, lr, seed, steps, delay=0.0, goal=None, parent=None, change=None):
     rnd = random.Random(seed)
     cfg = {"model": {"width": 128, "depth": 4}, "optim": {"name": "adam", "lr": lr}, "seed": seed, "steps": steps}
-    with RunLogger(logdir, name=name, config=cfg, total_steps=steps, goal=goal, resume=True) as log:
+    with RunLogger(logdir, name=name, config=cfg, total_steps=steps, goal=goal, resume=True, parent=parent, change=change) as log:
         loss, acc = 2.5, 0.1
         for step in range(steps):
             speed = min(1.0, lr / 1e-3)
@@ -50,9 +50,12 @@ def main():
     ap.add_argument("--logdir", default="logs/demo")
     ap.add_argument("--live", action="store_true", help="keep one extra run going (0.5 s per step)")
     a = ap.parse_args()
-    for name, lr, seed in (("baseline-lr1e-3-s1", 1e-3, 1), ("baseline-lr1e-3-s2", 1e-3, 2), ("lr3e-4-s1", 3e-4, 1)):
+    # parent/change make the 학습 트리 tab draw how one run led to the next
+    for name, lr, seed, parent, change in (("baseline-lr1e-3-s1", 1e-3, 1, None, None),
+                                           ("baseline-lr1e-3-s2", 1e-3, 2, "baseline-lr1e-3-s1", "시드만 다름 (1 → 2)"),
+                                           ("lr3e-4-s1", 3e-4, 1, "baseline-lr1e-3-s1", "학습률 1e-3 → 3e-4")):
         if not os.path.exists(os.path.join(a.logdir, name, "metrics.jsonl")):
-            fake_run(a.logdir, name, lr, seed, 400, goal="데모: 학습률 비교")
+            fake_run(a.logdir, name, lr, seed, 400, goal="데모: 학습률 비교", parent=parent, change=change)
             print("[demo] wrote", os.path.join(a.logdir, name))
     if a.live:
         print("[demo] live run: Ctrl+C to stop")

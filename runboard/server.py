@@ -27,7 +27,8 @@ NAME_RE = re.compile(r"^[A-Za-z0-9._\-][A-Za-z0-9._\-+=@ ]{0,199}$")
 REPORT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}$")
 ASSET_RE = re.compile(r"^[A-Za-z0-9._\-]{1,120}$")
 MEDIA_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".mp4", ".webm", ".json", ".txt", ".csv", ".log", ".md"}
-DEFAULTS = {"title": "Runboard", "stale_minutes": 10, "plugins": ["files"], "headline": [], "projects": []}
+DEFAULTS = {"title": "Runboard", "stale_minutes": 10, "plugins": ["files"], "headline": [], "projects": [],
+            "tree_sections": []}   # 학습 트리: [{"title": "MuSHR", "match": "^visual"}, ...] (run-name regex)
 
 
 # ----------------------------------------------------------------------------------------------- helpers
@@ -355,7 +356,8 @@ class Handler(BaseHTTPRequestHandler):
                     projects.append({"key": k, "title": pr.title, "logdir": pr.logdir, "runs": len(runs),
                                      "running": sum(1 for r in runs if r["status"] == "running")})
                 return self.send_json({"title": cfg["title"], "projects": projects, "plugins": cfg["plugins"],
-                                       "headline": cfg["headline"], "stale_minutes": cfg["stale_minutes"], "now": time.time()})
+                                       "headline": cfg["headline"], "stale_minutes": cfg["stale_minutes"],
+                                       "tree_sections": cfg.get("tree_sections") or [], "now": time.time()})
             pr = self.project()
             if parts == ["api", "runs"]:
                 return self.send_json({"project": pr.key, "logdir": pr.logdir, "now": time.time(), "runs": pr.runs()})
@@ -418,6 +420,9 @@ class Handler(BaseHTTPRequestHandler):
                          "tags": [str(t)[:40] for t in data.get("tags", []) if str(t).strip()][:20],
                          "goal": str(data.get("goal", ""))[:300], "note": str(data.get("note", ""))[:10000],
                          "folder": clean_folder(data.get("folder", "")),
+                         # 학습 트리: which run this one came from, what was changed, and the verdict
+                         "parent": str(data.get("parent") or "")[:200], "change": str(data.get("change") or "")[:500],
+                         "verdict": str(data.get("verdict") or "")[:2000],
                          "color": int(color) if str(color or "").isdigit() and 1 <= int(color) <= 8 else None,
                          "updated_time": time.time()}
                 write_json(os.path.join(d, "notes.json"), notes)

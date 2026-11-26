@@ -23,7 +23,7 @@ class ServerTest(unittest.TestCase):
             for i in range(5):
                 log.log(i, {"train/loss": 1.0 / (i + 1), "eval/acc": i / 5, "bad": float("nan")})
             log.save_file("samples/x.txt", "hello")
-        with RunLogger(os.path.join(logs, "group"), name="b-s2", config={"lr": 3e-4, "net": {"depth": 4}}) as log:
+        with RunLogger(os.path.join(logs, "group"), name="b-s2", config={"lr": 3e-4, "net": {"depth": 4}}, parent="a-s1", change="lr") as log:
             log.log(0, loss=2.0)
         args = server.argparse.Namespace(logs=logs, config=None, title=None)
         cfg, projects = server.load_config(args)
@@ -59,6 +59,8 @@ class ServerTest(unittest.TestCase):
         self.assertIsNone(m["rows"][0]["bad"])                       # NaN is stored as null
         self.assertEqual(self.get("api/runs/group/b-s2/metrics")["total"], 1)
         self.assertEqual(self.get("api/runs/a-s1/config")["flat"]["net.depth"], 4)
+        self.assertEqual((runs["group/b-s2"]["notes"]["parent"], runs["group/b-s2"]["notes"]["change"]), ("a-s1", "lr"))   # logger writes lineage
+        self.assertIn("tree_sections", self.get("api/config"))
 
     def test_files_and_traversal(self):
         files = self.get("api/runs/a-s1/files")["files"]
@@ -70,8 +72,10 @@ class ServerTest(unittest.TestCase):
                 urllib.request.urlopen(self.base + bad)
 
     def test_notes_folders_board_reports(self):
-        st, n = self.post("api/runs/a-s1/notes", {"star": True, "folder": "base/../x", "tags": ["t"], "color": 3})
+        st, n = self.post("api/runs/a-s1/notes", {"star": True, "folder": "base/../x", "tags": ["t"], "color": 3,
+                                                 "parent": "group/b-s2", "change": "lr 1e-3 -> 3e-4", "verdict": "ok"})
         self.assertEqual((st, n["star"], n["folder"], n["color"]), (200, True, "base/x", 3))
+        self.assertEqual((n["parent"], n["change"], n["verdict"]), ("group/b-s2", "lr 1e-3 -> 3e-4", "ok"))   # 학습 트리
         self.assertEqual(self.post("api/folders", {"folders": ["z", "a/b", "a/b"]})[1]["folders"], ["a/b", "z"])
         st, rec = self.post("api/board", {"rev": 0, "doc": {"goal": "g"}})
         self.assertEqual((st, rec["rev"]), (200, 1))

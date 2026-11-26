@@ -54,6 +54,7 @@ const state = {
   view: "runs", tab: store.get("tab", "curves"), xKey: store.get("xKey", "step"), smoothing: store.get("smoothing", 0.6),
   group: "all", metricQuery: "", compareMode: "last", diffOnly: true, cfgQuery: "",
   plugins: [], board: null, boardErr: null, boardSaving: false, reports: [], report: null, editing: null,
+  boardTab: store.get("board-tab", "overview"), tree: { sel: null, order: store.get("tree-order", "lineage"), archived: false, cfg: new Map(), files: new Map() },
 };
 const withProject = (u) => u + (u.includes("?") ? "&" : "?") + "project=" + encodeURIComponent(state.project);
 const runPath = (name) => name.split("/").map(encodeURIComponent).join("/");
@@ -599,8 +600,13 @@ function renderBoard() {
     ${state.editRound === r.id ? roundForm(r) : `<div class="rm-cols"><div><h5>목적</h5><p>${esc(r.goal || "–")}</p>${r.criteria ? `<h5 style="margin-top:6px">판단 기준</h5><p>${esc(r.criteria)}</p>` : ""}${(r.runs || []).length ? `<div class="meta-line" style="margin-top:6px">${r.runs.map(runChip).join("")}</div>` : ""}</div>
       <div><h5>알게 된 것</h5>${(r.learned || []).length ? `<ul>${r.learned.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>` : "<p>–</p>"}${r.then ? `<div class="rm-then">${esc(r.then)}</div>` : ""}</div></div>`}</div></li>`;
   const groups = TASK_ST.map(([k, l]) => { const ts = doc.tasks.filter((t) => t.status === k); return ts.length ? `<p class="group-title">${l} ${ts.length}</p>${ts.map(task).join("")}` : ""; }).join("");
+  const tabs = `<div class="board-tabs" role="tablist">${[["overview", "목표·로드맵·할 일"], ["tree", "학습 트리"]].map(([k, l]) => `<button type="button" role="tab" data-board-tab="${k}" aria-selected="${state.boardTab === k}">${l}</button>`).join("")}</div>`;
+  if (state.boardTab === "tree") {
+    root.innerHTML = `<div class="board board-wide"><div class="board-top"><h2>프로젝트 관리</h2><p>모든 실행을 시간 순 트리로: 어느 실험에서 무엇을 바꿔 다음 실험을 했는지</p><span class="sync" id="sync"></span></div>${tabs}<section class="panel section" id="tree-root"></section></div>`;
+    syncLabel(); renderTree(); return;
+  }
   root.innerHTML = `<div class="board">
-    <div class="board-top"><h2>프로젝트 관리</h2><p>목표, 학습 로드맵, 할 일, 결정할 것을 팀이 함께 봅니다. 바꾼 내용은 서버에 바로 저장됩니다.</p><span class="sync" id="sync"></span></div>
+    <div class="board-top"><h2>프로젝트 관리</h2><p>목표, 학습 로드맵, 할 일, 결정할 것을 팀이 함께 봅니다. 바꾼 내용은 서버에 바로 저장됩니다.</p><span class="sync" id="sync"></span></div>${tabs}
     <section class="panel section"><header><h3>목표</h3><p>이 프로젝트가 끝났을 때 무엇이 되어 있어야 하나</p></header><input class="field goal-input" id="board-goal" value="${esc(doc.goal || "")}" placeholder="예: 검증 정확도 90% 이상인 모델을 재현 가능하게 (시드 3개)"></section>
     <section class="panel section"><header><h3>학습 로드맵</h3><p>라운드마다 무엇을 확인하려 했고, 무엇을 알게 됐고, 그래서 다음에 무엇을 했는지</p></header>
       <ol class="rm-list">${doc.roadmap.map(round).join("")}</ol>
@@ -617,6 +623,156 @@ function roundForm(r) {
     <span>목적</span><textarea class="field" data-r="goal">${esc(r.goal || "")}</textarea><span>판단 기준</span><input class="field" data-r="criteria" value="${esc(r.criteria || "")}">
     <span>관련 실행</span><input class="field" data-r="runs" value="${esc((r.runs || []).join(", "))}" placeholder="쉼표로 구분"><span>알게 된 것</span><textarea class="field" data-r="learned" placeholder="한 줄에 하나">${esc((r.learned || []).join("\n"))}</textarea>
     <span>그래서 →</span><input class="field" data-r="then" value="${esc(r.then || "")}"><span></span><span><button class="btn primary" type="button" data-act="done-round">닫기</button> <button class="btn danger" type="button" data-act="del-round">삭제</button></span></div>`;
+}
+
+// ============================================================== 학습 트리
+// Every run is a point on a time axis (start -> last update), one row per run, rows grouped by top-level folder
+// (colour) and, optionally, by section (config "tree_sections": [{"title", "match": run-name regex}]).
+// notes.parent links a run to the run it came from; notes.change says what was changed, notes.verdict how it went.
+const TREE_PAL = ["#2563eb", "#ea580c", "#16a34a", "#ca8a04", "#db2777", "#0d9488", "#7c3aed", "#dc2626", "#0891b2", "#65a30d", "#9333ea", "#64748b"];
+const isSeedChange = (c) => /^(시드|seed|same|같은 설정)/i.test(c || "");
+const runStart = (r) => r.meta?.start_time || r.updated_time || 0;
+function treeLayout(runs) {
+  const T = state.tree, byName = new Map(runs.map((r) => [r.name, r])), shown = new Set(byName.keys());
+  const top = (r) => (r.notes?.folder || "").split("/")[0] || "폴더 없음";
+  const secDefs = (state.config?.tree_sections || []).map((s) => ({ title: s.title, re: (() => { try { return new RegExp(s.match); } catch { return null; } })() })).filter((s) => s.re);
+  const secOf = (r) => (secDefs.find((s) => s.re.test(r.name))?.title) || (secDefs.length ? "기타" : "");
+  const parentOf = (r) => { const p = r.notes?.parent; return p && shown.has(p) && secOf(byName.get(p)) === secOf(r) ? p : null; };
+  const kids = new Map();
+  for (const r of runs) { const p = parentOf(r); if (p) { if (!kids.has(p)) kids.set(p, []); kids.get(p).push(r.name); } }
+  // depth-first walk: seed repeats first, then follow-ups in the same folder, then the rest, oldest first
+  const walk = [], seen = new Set();
+  const visit = (n) => {
+    if (seen.has(n)) return; seen.add(n); walk.push(n);
+    const me = byName.get(n);
+    (kids.get(n) || []).slice().sort((a, b) => (isSeedChange(byName.get(b).notes?.change) - isSeedChange(byName.get(a).notes?.change))
+      || ((top(byName.get(b)) === top(me)) - (top(byName.get(a)) === top(me))) || runStart(byName.get(a)) - runStart(byName.get(b))).forEach(visit);
+  };
+  const secTitles = secDefs.length ? [...secDefs.map((s) => s.title), "기타"] : [""];
+  for (const st of secTitles) runs.filter((r) => secOf(r) === st && !parentOf(r)).sort((a, b) => runStart(a) - runStart(b)).forEach((r) => visit(r.name));
+  const order = new Map(walk.map((n, i) => [n, i]));
+  const num = (g) => { const m = /^(\d+)/.exec(g); return m ? +m[1] : 1e9; };
+  const byNum = (a, b) => num(a) - num(b) || a.localeCompare(b);
+  const allGroups = [...new Set(runs.map(top))].sort(byNum);
+  const lineage = T.order !== "folder";
+  const sections = secTitles.map((st) => {
+    const rs = runs.filter((r) => secOf(r) === st);
+    const groups = lineage ? [...new Set(walk.filter((n) => secOf(byName.get(n)) === st).map((n) => top(byName.get(n))))] : [...new Set(rs.map(top))].sort(byNum);
+    return { title: st, groups: groups.map((g) => ({ g, runs: rs.filter((r) => top(r) === g).sort((a, b) => lineage ? order.get(a.name) - order.get(b.name) : runStart(a) - runStart(b)) })) };
+  }).filter((s) => s.groups.length);
+  return { sections, color: (g) => TREE_PAL[allGroups.indexOf(g) % TREE_PAL.length], top, parentOf, allGroups };
+}
+function renderTree() {
+  const root = $("#tree-root"); if (!root) return;
+  const T = state.tree;
+  const runs = state.runs.filter((r) => runStart(r) && (T.archived || !r.notes?.archived));
+  if (!runs.length) { root.innerHTML = '<div class="empty-state">실행이 없습니다</div>'; return; }
+  const { sections, color, top, parentOf, allGroups } = treeLayout(runs);
+  const t0 = Math.min(...runs.map(runStart)), t1 = Math.max(...runs.map((r) => r.updated_time || runStart(r)), t0 + 60);
+  const L = 220, R = 300, rowH = 26, gGap = 14, top0 = 36, avail = Math.max(900, root.clientWidth - 34);
+  const span = t1 - t0, day = 86400, W = Math.max(avail, Math.min(6000, Math.round(span / day * 150)) + L + R);
+  const X = (t) => L + (t - t0) / span * (W - L - R);
+  const rows = [], gInfo = [], sInfo = []; let y = top0;
+  for (const s of sections) {
+    const sy = y; if (s.title) y += 28;
+    for (const { g, runs: rs } of s.groups) { const y0 = y; rs.forEach((r) => { rows.push({ r, g, y: y + rowH / 2 }); y += rowH; }); gInfo.push({ g, y0, y1: y }); y += gGap; }
+    if (s.title) { sInfo.push({ title: s.title, y0: sy, y1: y, n: s.groups.reduce((a, x) => a + x.runs.length, 0) }); y += 18; }
+  }
+  const H = y + 8, pos = new Map(rows.map((x) => [x.r.name, x]));
+  // time grid: days, or hours for short projects
+  const stepT = span > 2 * day ? day : span > 6 * 3600 ? 3 * 3600 : 3600;
+  const g0 = new Date(t0 * 1000); g0.setMinutes(0, 0, 0); if (stepT === day) g0.setHours(0);
+  let grid = "";
+  for (let t = g0.getTime() / 1000; t <= t1; t += stepT) { const x = X(t); if (x < L - 1) continue;
+    grid += `<line x1="${x}" x2="${x}" y1="${top0 - 8}" y2="${H}" class="tr-grid"/><text x="${x + 3}" y="${top0 - 14}" class="tr-axis">${new Date(t * 1000).toLocaleString("ko-KR", stepT === day ? { month: "numeric", day: "numeric", weekday: "short" } : { month: "numeric", day: "numeric", hour: "2-digit" })}</text>`; }
+  const sel = T.sel && pos.has(T.sel) ? T.sel : null;
+  const kin = new Set(); if (sel) { kin.add(sel); const p = state.byName.get(sel)?.notes?.parent; if (p) kin.add(p); rows.forEach(({ r }) => { if (r.notes?.parent === sel) kin.add(r.name); }); }
+  let bands = "", edges = "", pts = "";
+  for (const s of sInfo) bands += `<rect x="1" y="${s.y0}" width="${W - 2}" height="${s.y1 - s.y0}" rx="10" class="tr-sec"/><text x="14" y="${s.y0 + 19}" class="tr-sec-t">${esc(s.title)} · ${s.n}개</text>`;
+  for (const gi of gInfo) { const c = color(gi.g);
+    bands += `<rect x="4" y="${gi.y0 - 4}" width="${W - 8}" height="${gi.y1 - gi.y0 + 8}" rx="8" fill="${c}" fill-opacity=".06"/><rect x="4" y="${gi.y0 - 4}" width="4" height="${gi.y1 - gi.y0 + 8}" rx="2" fill="${c}"/><text x="16" y="${gi.y0 + 14}" class="tr-grp" fill="${c}">${esc(gi.g.length > 28 ? gi.g.slice(0, 27) + "…" : gi.g)}</text>`; }
+  // links: down (or up) from the parent's point, then right to the child (cross-section links included)
+  for (const { r, y, g } of rows) {
+    const p = r.notes?.parent, pp = p && pos.get(p); if (!pp) continue;
+    const seed = isSeedChange(r.notes?.change), xa = X(runStart(pp.r)), xb = X(runStart(r)), ya = pp.y, on = sel && kin.has(r.name) && kin.has(p);
+    const rr = Math.min(6, Math.abs(y - ya) / 2, Math.max(0, xb - xa) / 2), dy = y > ya ? 1 : -1;
+    const d = Math.abs(y - ya) < 1 ? `M${xa},${ya} H${xb}` : xb - xa < 1 ? `M${xa},${ya} V${y}` : `M${xa},${ya} V${y - dy * rr} Q${xa},${y} ${xa + rr},${y} H${xb}`;
+    edges += `<path d="${d}" fill="none" stroke="${color(g)}" stroke-width="${on ? 3 : seed ? 1.2 : 2}" stroke-opacity="${sel && !on ? 0.15 : seed ? 0.5 : 0.8}" ${seed ? 'stroke-dasharray="3 3"' : ""}/>`;
+  }
+  const hk = state.config?.headline?.[0];
+  for (const { r, y, g } of rows) {
+    const c = color(g), x = X(runStart(r)), xe = X(r.updated_time || runStart(r)), bad = ["failed", "stopped"].includes(r.status), dim = sel && !kin.has(r.name);
+    const v = hk ? r.summary?.last?.[hk] : null, res = typeof v === "number" ? `${hk} ${fmtNum(v)}` : "";
+    pts += `<g class="tr-run ${sel === r.name ? "sel" : ""}" data-tree-run="${esc(r.name)}" tabindex="0" role="button" opacity="${dim ? 0.35 : 1}">`
+      + `<line x1="${x}" x2="${Math.max(xe, x + 2)}" y1="${y}" y2="${y}" stroke="${c}" stroke-width="5" stroke-opacity=".35" stroke-linecap="round"/>`
+      + `<circle class="pt" cx="${x}" cy="${y}" r="6" fill="${bad ? "var(--surface)" : c}" stroke="${c}" stroke-width="2"/>`
+      + `<text class="tr-lbl" x="${Math.max(xe, x) + 10}" y="${y + 4}">${esc(r.name)}${r.status === "running" ? " ⏳" : ""}</text>`
+      + (res ? `<text class="tr-res" x="${Math.max(xe, x) + 10 + r.name.length * 6.4 + 18}" y="${y + 4}">${esc(res)}</text>` : "")
+      + `<title>${esc(r.name)}${r.notes?.change ? "\n바꾼 것: " + esc(r.notes.change) : ""}${r.notes?.verdict ? "\n결과: " + esc(r.notes.verdict) : ""}</title></g>`;
+  }
+  root.innerHTML = `<header><h3>학습 트리 <span class="hint">실행 ${rows.length}개</span></h3>
+      <p>가로 = 시간 (점은 학습 시작, 막대는 학습 기간), 줄 하나 = 실행 하나, 색 = 폴더. 연결선은 부모 실행에서 무엇을 바꿔 이 실행을 했는지 (실선 = 설정 변경, 점선 = 시드만 변경), 속 빈 점 = 중단·실패. 점을 누르면 목적·바꾼 설정·결과·그래프·파일이 열리고, 거기서 부모·바꾼 것·결과 평가를 적을 수 있습니다.</p></header>
+    <div class="tr-legend">${allGroups.map((g) => `<span><i style="background:${color(g)}"></i>${esc(g)}</span>`).join("")}
+      <span class="tr-ctl"><button class="chip" type="button" data-tree-order="lineage" aria-pressed="${T.order !== "folder"}">계보 순</button><button class="chip" type="button" data-tree-order="folder" aria-pressed="${T.order === "folder"}">폴더 번호 순</button>
+      <label class="toggle"><input type="checkbox" id="tree-archived" ${T.archived ? "checked" : ""}> 보관함 실행도</label></span></div>
+    <div class="tr-canvas"><svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="학습 트리">${bands}${grid}${edges}${pts}</svg></div>
+    <aside class="tr-side" id="tree-side" ${sel ? "" : "hidden"} aria-label="실행 설명"></aside>`;
+  if (sel) renderTreeSide(state.byName.get(sel), color(top(state.byName.get(sel))));
+}
+function miniChart(series) {
+  const all = series.flatMap((s) => s.points); if (!all.length) return "";
+  const W = 400, H = 120, l = 40, r = 8, t = 8, b = 18;
+  const x0 = Math.min(...all.map((p) => p.x)), x1 = Math.max(...all.map((p) => p.x)), y0 = Math.min(...all.map((p) => p.y)), y1 = Math.max(...all.map((p) => p.y));
+  const X = (v) => l + (v - x0) / (x1 - x0 || 1) * (W - l - r), Y = (v) => t + (1 - (v - y0) / (y1 - y0 || 1)) * (H - t - b);
+  return `<svg class="tr-mini" viewBox="0 0 ${W} ${H}" width="100%">${[y0, (y0 + y1) / 2, y1].map((v) => `<line x1="${l}" x2="${W - r}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--line)"/><text x="${l - 4}" y="${Y(v) + 3}" text-anchor="end">${fmtNum(v)}</text>`).join("")}
+    <text x="${l}" y="${H - 3}">${fmtNum(x0)}</text><text x="${W - r}" y="${H - 3}" text-anchor="end">${fmtNum(x1)}</text>
+    ${series.map((s) => `<polyline fill="none" stroke="${s.color}" stroke-width="2" ${s.dash ? 'stroke-dasharray="4 3"' : ""} points="${downsample(s.points, 300).map((p) => `${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join(" ")}"/>`).join("")}</svg>
+    <div class="hint">${series.map((s) => `<span style="color:${s.color}">${s.dash ? "┄" : "━"}</span> ${esc(s.name)}`).join(" &nbsp; ")}</div>`;
+}
+async function renderTreeSide(r, c) {
+  const side = $("#tree-side"); if (!side || !r) return;
+  const T = state.tree, n = r.notes || {}, par = n.parent && state.byName.get(n.parent) ? n.parent : "";
+  const kids = state.runs.filter((x) => x.notes?.parent === r.name).map((x) => x.name);
+  side.hidden = false; side.style.setProperty("--trc", c);
+  side.innerHTML = `<button class="btn tr-close" type="button" data-tree-close>닫기 ✕</button>
+    <div class="tr-folder" style="color:${c}">${esc(n.folder || "폴더 없음")}</div><h4 class="mono">${esc(r.name)}</h4>
+    <div class="tr-nav">${par ? `<span class="hint">부모</span><button type="button" data-tree-run="${esc(par)}">↑ ${esc(par)}</button>` : '<span class="hint">출발점 (부모 없음)</span>'}${kids.length ? `<span class="hint">다음</span>${kids.map((k) => `<button type="button" data-tree-run="${esc(k)}">↓ ${esc(k)}</button>`).join("")}` : ""}</div>
+    ${n.goal ? `<h5>목적</h5><div class="tr-goal">${esc(n.goal)}</div>` : ""}
+    <h5>바꾼 것</h5><div>${esc(n.change || "–")}</div><div id="tree-diff" class="hint">${par ? "부모와 설정 비교 중…" : ""}</div>
+    <h5>결과 평가</h5><div class="tr-verdict">${esc(n.verdict || "–")}</div>
+    <h5>핵심 결과 <span class="hint">(마지막 20행 기준)</span></h5><div id="tree-res"></div>
+    <h5>그래프</h5><div id="tree-plot" class="hint">불러오는 중…</div>
+    <h5>파일 (영상·이미지)</h5><div id="tree-files" class="hint">불러오는 중…</div>
+    ${n.note ? `<h5>메모</h5><div>${esc(n.note)}</div>` : ""}
+    <details class="tr-edit"><summary>계보·평가 고치기</summary>
+      <label>부모 실행<select class="field" id="tree-e-parent"><option value="">(없음: 출발점)</option>${state.runs.filter((x) => x.name !== r.name).map((x) => `<option ${x.name === n.parent ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></label>
+      <label>바꾼 것 <span class="hint">"시드만 다름"으로 쓰면 점선</span><input class="field" id="tree-e-change" value="${esc(n.change || "")}" placeholder="예: 학습률 1e-3 → 3e-4"></label>
+      <label>결과 평가<textarea class="field" id="tree-e-verdict" placeholder="예: 채택. 검증 정확도 +2%p">${esc(n.verdict || "")}</textarea></label>
+      <button class="btn primary" type="button" data-tree-save>저장</button></details>
+    <a class="btn" href="?project=${encodeURIComponent(state.project)}&run=${encodeURIComponent(r.name)}#runs">실행 화면에서 보기</a>`;
+  // key results: headline metrics, this run vs parent
+  const keys = (state.config?.headline || []).length ? state.config.headline : Object.keys(r.summary?.last || {}).filter((k) => !META_KEYS.has(k)).slice(0, 6);
+  const L1 = r.summary?.last || {}, L0 = par ? state.byName.get(par).summary?.last || {} : null;
+  $("#tree-res").innerHTML = keys.length ? `<table class="tr-tbl"><thead><tr><th>지표</th>${L0 ? "<th>부모</th>" : ""}<th>이 실행</th></tr></thead><tbody>${keys.map((k) => `<tr><td class="mono">${esc(k)}</td>${L0 ? `<td>${fmtNum(L0[k])}</td>` : ""}<td><b>${fmtNum(L1[k])}</b></td></tr>`).join("")}</tbody></table>` : '<span class="hint">기록된 지표가 없습니다</span>';
+  // plot: first headline metric over steps, this run vs parent
+  await Promise.all([loadMetrics(r.name), par ? loadMetrics(par) : null]);
+  const pk = keys[0], plot = $("#tree-plot");
+  if (plot) { const s1 = pk ? series(r.name, pk) : [], s0 = pk && par ? series(par, pk) : [];
+    plot.className = ""; plot.innerHTML = s1.length ? `<div class="hint mono">${esc(pk)}</div>` + miniChart([...(s0.length ? [{ name: "부모 " + par, color: "var(--muted)", dash: true, points: s0 }] : []), { name: "이 실행", color: c, points: s1 }]) : '<span class="hint">그릴 지표가 없습니다</span>'; }
+  // settings that differ from the parent
+  if (par) {
+    const cfgOf = async (x) => { if (!T.cfg.has(x)) { try { T.cfg.set(x, (await api.runConfig(x)).flat || {}); } catch { T.cfg.set(x, {}); } } return T.cfg.get(x); };
+    const [c1, c0] = await Promise.all([cfgOf(r.name), cfgOf(par)]);
+    const show = (v) => (v === undefined ? "—" : typeof v === "string" ? v : JSON.stringify(v));
+    const diff = Object.keys({ ...c0, ...c1 }).filter((k) => show(c0[k]) !== show(c1[k]) && !/(^|\.)(seed|device|run_name|name)$/.test(k));
+    const box = $("#tree-diff"); if (box) { box.className = ""; box.innerHTML = diff.length ? `<table class="tr-tbl"><tbody>${diff.slice(0, 30).map((k) => `<tr><td class="mono">${esc(k)}</td><td>${esc(show(c0[k]))} → <span class="tr-chg">${esc(show(c1[k]))}</span></td></tr>`).join("")}</tbody></table>${diff.length > 30 ? `<span class="hint">외 ${diff.length - 30}개</span>` : ""}` : '<span class="hint">설정은 부모와 같음 (시드·장치·이름 제외)</span>'; }
+  }
+  // media files
+  if (!T.files.has(r.name)) { try { T.files.set(r.name, (await api.files(r.name)).files || []); } catch { T.files.set(r.name, []); } }
+  const fs = T.files.get(r.name), vids = fs.filter((f) => /\.(mp4|webm)$/i.test(f.path)), imgs = fs.filter((f) => /\.(png|jpe?g|gif|svg|webp)$/i.test(f.path));
+  const fb = $("#tree-files");
+  if (fb) { fb.className = ""; fb.innerHTML = (vids.slice(-3).map((f) => `<video src="${api.fileUrl(r.name, f.path)}" controls preload="metadata" playsinline></video><span class="hint mono">${esc(f.path)}</span>`).join("")
+    + (imgs.length ? `<div class="tr-imgs">${imgs.slice(-4).map((f) => `<a href="${api.fileUrl(r.name, f.path)}" target="_blank" rel="noopener"><img src="${api.fileUrl(r.name, f.path)}" alt="${esc(f.path)}" loading="lazy"></a>`).join("")}</div>` : "")) || '<span class="hint">영상·이미지 파일이 없습니다</span>'; }
 }
 
 // ============================================================== GPUs
@@ -764,6 +920,21 @@ function wire() {
 
   // board
   const board = $("#view-board");
+  board.addEventListener("click", async (e) => {
+    const bt = e.target.closest("[data-board-tab]"); if (bt) { state.boardTab = bt.dataset.boardTab; store.set("board-tab", state.boardTab); renderBoard(); return; }
+    if (e.target.closest("[data-tree-close]")) { state.tree.sel = null; renderTree(); return; }
+    const to = e.target.closest("[data-tree-order]"); if (to) { state.tree.order = to.dataset.treeOrder; store.set("tree-order", state.tree.order); renderTree(); return; }
+    if (e.target.closest("[data-tree-save]")) {
+      const r = state.byName.get(state.tree.sel); if (!r) return;
+      try { await saveNotes(r, { parent: $("#tree-e-parent").value, change: $("#tree-e-change").value.trim(), verdict: $("#tree-e-verdict").value.trim() }); toast("저장했습니다"); renderTree(); }
+      catch (err) { toast("저장하지 못했습니다: " + err.message); }
+      return;
+    }
+    const tr = e.target.closest("[data-tree-run]"); if (tr) { state.tree.sel = tr.dataset.treeRun; renderTree(); }
+  });
+  board.addEventListener("change", (e) => { if (e.target.id === "tree-archived") { state.tree.archived = e.target.checked; renderTree(); } });
+  board.addEventListener("keydown", (e) => { const g = e.target.closest?.("[data-tree-run]"); if (g && g.tagName !== "BUTTON" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); state.tree.sel = g.dataset.treeRun; renderTree(); } });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && state.tree.sel && $("#tree-side")) { state.tree.sel = null; renderTree(); } });
   board.addEventListener("submit", (e) => {
     e.preventDefault(); const doc = state.board.doc, f = e.target;
     if (f.id === "add-task") doc.tasks.push({ id: uid("t"), title: f.title.value.trim(), who: f.who.value.trim(), status: "todo", note: "", runs: [] });

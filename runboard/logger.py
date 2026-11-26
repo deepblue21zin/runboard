@@ -43,7 +43,8 @@ def _jsonable(v):
 
 
 class RunLogger:
-    def __init__(self, logdir, name=None, config=None, total_steps=None, goal=None, tags=None, resume=False):
+    def __init__(self, logdir, name=None, config=None, total_steps=None, goal=None, tags=None, resume=False,
+                 parent=None, change=None):
         name = name or time.strftime("run-%Y%m%d-%H%M%S")
         self.dir = os.path.join(logdir, name)
         if os.path.exists(os.path.join(self.dir, "metrics.jsonl")) and not resume:
@@ -58,9 +59,9 @@ class RunLogger:
         self._write("meta.json", self.meta)
         if config is not None:
             self._write("config.json", _jsonable(config))
-        if goal or tags:
+        if goal or tags or parent or change:
             notes = self._read("notes.json") or {}
-            notes.update({k: v for k, v in (("goal", goal), ("tags", list(tags or []))) if v})
+            notes.update({k: v for k, v in (("goal", goal), ("tags", list(tags or [])), ("parent", parent), ("change", change)) if v})
             self._write("notes.json", notes)
         self._f = open(os.path.join(self.dir, "metrics.jsonl"), "a", encoding="utf-8")
 
